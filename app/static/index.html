@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Modbus</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Modbus</div>
+  <nav id="devtabs" class="tabs"></nav>
+  <div class="grow"></div>
+  <div id="status" class="pill">—</div>
+  <label class="switch" title="Automatyczne odświeżanie">
+    <input type="checkbox" id="auto">
+    <span></span>
+    <select id="interval" aria-label="interwał">
+      <option value="10">10 s</option>
+      <option value="30" selected>30 s</option>
+      <option value="60">60 s</option>
+    </select>
+  </label>
+  <button id="tracebtn" class="ghost">Diagnostyka</button>
+  <button id="termbtn" class="ghost" title="Podgląd ramek na żywo">Terminal</button>
+  <button id="refresh" class="primary">Odczytaj</button>
+</header>
+
+<div class="subbar">
+  <span id="devnote" class="note"></span>
+  <span class="grow"></span>
+  <span id="diag" class="note mono"></span>
+</div>
+
+<div class="shell">
+<main>
+  <section id="trace" class="panel hidden">
+    <header class="panel-head">
+      <strong>Diagnostyka łańcucha</strong>
+      <span id="tracets" class="note"></span>
+      <div class="grow"></div>
+      <button id="tracerun" class="ghost small">Uruchom test</button>
+      <button id="traceclose" class="ghost small">Zamknij</button>
+    </header>
+    <div id="chain" class="chain"></div>
+    <div id="tracedet"></div>
+  </section>
+
+  <section id="cards" class="cards"></section>
+
+  <section class="panel">
+    <header class="panel-head">
+      <button id="toggledetail" class="disclosure" aria-expanded="false">
+        <span class="caret">▸</span> Wszystkie rejestry
+        <span id="regcount" class="count"></span>
+      </button>
+      <div class="grow"></div>
+      <button id="auditbtn" class="ghost small">Historia zapisów</button>
+    </header>
+
+    <div id="detail" class="hidden">
+      <div class="toolbar">
+        <nav id="cattabs" class="tabs small"></nav>
+        <span class="grow"></span>
+        <input type="search" id="q" placeholder="filtruj: nazwa, klucz, numer…">
+        <label class="chk"><input type="checkbox" id="onlywrite"> tylko zapisywalne</label>
+      </div>
+      <div id="tables"></div>
+    </div>
+  </section>
+</main>
+
+<aside id="term" class="term hidden">
+  <header class="term-head">
+    <strong>Ramki na żywo</strong>
+    <span id="termstat" class="note"></span>
+    <span id="termfit" class="note mono"></span>
+    <div class="grow"></div>
+    <select id="termpos" title="Położenie terminala">
+      <option value="auto" selected>auto</option>
+      <option value="right">po prawej</option>
+      <option value="bottom">pod spodem</option>
+    </select>
+    <label class="chk"><input type="checkbox" id="termfollow" checked> podążaj</label>
+    <button id="termclear" class="ghost small">Wyczyść</button>
+  </header>
+  <div id="termbody" class="term-body"></div>
+</aside>
+</div>
+
+<div id="modal" class="overlay hidden">
+  <div class="box">
+    <h2>Potwierdź zapis</h2>
+    <dl id="mdetails"></dl>
+    <p class="warn">Ramka pójdzie na magistralę RS-485 i zmieni stan urządzenia.</p>
+    <div class="actions">
+      <button id="mcancel" class="ghost">Anuluj</button>
+      <button id="mok" class="danger">Zapisz</button>
+    </div>
+  </div>
+</div>
+
+<div id="auditmodal" class="overlay hidden">
+  <div class="box wide">
+    <h2>Historia zapisów</h2>
+    <div id="auditbody"></div>
+    <div class="actions"><button id="acancel" class="ghost">Zamknij</button></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

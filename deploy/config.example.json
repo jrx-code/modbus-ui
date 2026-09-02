@@ -1,0 +1,21 @@
+{
+  "devices": [
+    {
+      "id": "toshiba",
+      "name": "Toshiba HAORI - BMS-IFMB1280U-E",
+      "note": "3 x RAS-B10N4KVRG-E indoor units behind TCB-SSRL011UUP-E RAC interfaces.",
+      "host": "192.0.2.10",
+      "port": 8899,
+      "framing": "rtuovertcp",
+      "timeout": 2.5,
+      "slave": 1,
+      "write_enabled": true,
+      "map": "toshiba",
+      "units": [
+        {"n": 1, "label": "Bedroom"},
+        {"n": 2, "label": "Study"},
+        {"n": 3, "label": "Office"}
+      ]
+    }
+  ]
+}
