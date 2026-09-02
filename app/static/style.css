@@ -291,8 +291,8 @@ dd{margin:0;font-family:ui-monospace,Menlo,monospace;word-break:break-all;font-s
 .modhead{display:flex;align-items:center;gap:8px;padding:9px 12px;
   border-bottom:1px solid var(--line);background:var(--panel2);flex-wrap:wrap}
 .modhead strong{font-size:13px}
-.badge{font-size:10.5px;border-radius:4px;padding:1px 6px;
-  font-family:ui-monospace,Menlo,monospace}
+.badge{display:inline-block;font-size:10.5px;border-radius:4px;padding:1px 6px;
+  white-space:nowrap;font-family:ui-monospace,Menlo,monospace}
 .badge.ok{background:#132b19;color:var(--ok)}
 .badge.bad{background:#3a1a18;color:var(--bad)}
 .badge.term{background:#2a2410;color:var(--warn)}
@@ -334,3 +334,15 @@ select.rot.wrongsel{border-color:var(--bad);color:var(--bad)}
 .swrefhead .src{font-size:10.5px;color:var(--dim);font-family:ui-monospace,Menlo,monospace}
 .swtitle{font-size:12px;color:var(--mut);margin-bottom:7px}
 .aftlist{margin:0 0 12px;padding-left:20px;font-size:12.5px;color:var(--mut);line-height:1.65}
+.derivebar{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap;
+  background:#121922;border:1px solid var(--line);border-radius:8px;padding:9px 12px}
+.derivebar .dlab{font-size:12px;color:var(--mut)}
+.derivebar b{font-size:12.5px}
+.modcard.isref{border-color:var(--acc2)}
+.refpick{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--mut);cursor:pointer}
+.refpick input{margin:0}
+.modcard.isref .refpick{color:var(--acc)}
+.planbox{margin-top:14px;border:1px solid var(--line);border-radius:8px;
+  background:#121922;padding:11px 12px}
+.planhead{font-size:12px;color:var(--mut);margin-bottom:9px}
+.planbox .adm-t{margin-bottom:10px}

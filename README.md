@@ -51,6 +51,12 @@ state a human found on the board, computes the required state from the addresses
 config, and lists the exact moves between the two. Every rule is quoted from the vendor
 manual with a page reference; nothing here talks to the bus.
 
+Set one board up, mark it as the reference, and **Compute the rest** derives every other
+board from it: bus-wide bits are copied verbatim, addresses and the bus terminator follow
+from the rules. Addresses come either sequentially from the reference or from the config,
+whichever the site calls for. A reference that violates the manual is reported rather than
+silently propagated.
+
 ![Adapter switches](docs/img/05-modules.png)
 
 ## Design notes
@@ -110,6 +116,7 @@ deploy/
 | `POST /api/write` | perform the write (whitelist + audit) |
 | `GET /api/modules?device=ID` | adapter switch spec, target values, recorded state, diff |
 | `POST /api/modules` | record the switch state found on one adapter board |
+| `POST /api/modules/derive` | derive the remaining boards from a reference board (no writes) |
 | `GET /api/audit` | last 100 writes |
 
 ## Install

@@ -8,6 +8,7 @@ Stdlib only. Serwuje statyczny frontend i JSON API:
     GET  /api/diag?device=ID       liczniki diagnostyczne interfejsu
     GET  /api/modules?device=ID    przelaczniki adapterow RAC I/F: cel, stan, roznice
     POST /api/modules              zapis stanu przelacznikow jednego adaptera
+    POST /api/modules/derive       rozpisanie pozostalych adapterow z modulu glownego
     GET  /api/audit                ostatnie zapisy
 """
 
@@ -724,6 +725,18 @@ def save_module(dev: dict, n, state) -> dict:
     return modules_view(dev)
 
 
+def derive_modules(dev: dict, ref_n, ref_state, addressing: str) -> dict:
+    """Wylicza ustawienia pozostalych adapterow. Niczego nie zapisuje."""
+    try:
+        ref_n = int(ref_n)
+    except (TypeError, ValueError):
+        raise ValueError("numer modulu glownego musi byc liczba")
+    out = racif.derive(dev["units"], ref_n, ref_state, str(addressing or "sequential"))
+    log(f"WYLICZENIE {dev['id']}: glowny={ref_n} adresowanie={out['addressing']} "
+        + ", ".join(f"{p['n']}→{p['addr']}" for p in out["plan"]))
+    return out
+
+
 def _bits(vals: list) -> str:
     return "/".join("ON" if v else "OFF" for v in vals)
 
@@ -859,6 +872,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, apply_config(body["device"], body.get("changes") or {}))
             elif u.path == "/api/modules":
                 self._json(200, save_module(dev, body.get("n"), body.get("state")))
+            elif u.path == "/api/modules/derive":
+                self._json(200, derive_modules(dev, body.get("ref"), body.get("state"),
+                                               body.get("addressing")))
             elif u.path == "/api/config/reset":
                 self._json(200, reset_config(body["device"]))
             elif u.path == "/api/write":

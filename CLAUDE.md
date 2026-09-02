@@ -32,6 +32,14 @@ Site-specific deployment values live outside this repo (`/etc/modbus-ui/config.j
   Modbus protocol reads those back, so `/api/modules` stores what a person reported and
   computes the target from `units[].n` by rules. Never present the stored state as if it
   were measured.
+- **Deriving boards copies faults too.** `racif.derive()` propagates the bus-wide bits from
+  the reference board verbatim, on purpose — the point is to mirror what is physically set.
+  `REQUIRED` exists so a non-compliant reference is reported in `notes` instead of being
+  quietly corrected. Never "fix" the reference inside `derive()`.
+- **Sequential addressing can go negative.** The reference may sit anywhere in the config
+  order, so a low reference address pushes earlier units below zero. `_apply_addr` clamps
+  the rotary to 0 because a physical selector cannot show -1, while `plan` and `notes` carry
+  the true value. Keep the two apart.
 - **The terminator belongs to the lowest indoor address, not to unit 1.** `board()` takes
   the flag from `min(units[].n)`. Hardcoding unit 1 breaks the moment the addressing plan
   changes.

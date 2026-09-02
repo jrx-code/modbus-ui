@@ -894,6 +894,9 @@ function adminToggle() {
 let MODVIEW = null;   // odpowiedz /api/modules
 let MODEDIT = {};     // robocza kopia stanu, n -> {sw21,sw61,sw62,sw63,sw64}
 let MODMSG = {};      // n -> [klasa, tekst]
+let MODREF = null;    // numer modulu glownego
+let MODPLAN = null;   // wynik ostatniego wyliczenia, do pokazania obok
+let MODADDR = 'sequential';
 
 const clone = o => JSON.parse(JSON.stringify(o));
 
@@ -901,6 +904,8 @@ async function modLoad() {
   MODVIEW = await api('/api/modules?device=' + encodeURIComponent(DEV.id));
   MODEDIT = {};
   MODVIEW.modules.forEach(m => { MODEDIT[m.n] = clone(m.state); });
+  if (MODREF === null || !MODVIEW.modules.some(m => m.n === MODREF))
+    MODREF = MODVIEW.modules.reduce((a, m) => Math.min(a, m.n), Infinity);
   renderModules();
 }
 
@@ -973,7 +978,7 @@ function rotaryRow(m, sw) {
 }
 
 function moduleCard(m) {
-  const card = el('div', 'modcard');
+  const card = el('div', 'modcard' + (MODREF === m.n ? ' isref' : ''));
 
   const h = el('header', 'modhead');
   h.appendChild(el('strong', '', m.label));
@@ -982,6 +987,13 @@ function moduleCard(m) {
   h.appendChild(el('span', 'badge ' + (abad ? 'bad' : 'ok'), 'adres ' + addr));
   if (m.terminator) h.appendChild(el('span', 'badge term', 'terminator Uh'));
   h.appendChild(el('span', 'grow'));
+  const rl = el('label', 'refpick');
+  const r = el('input');
+  r.type = 'radio'; r.name = 'modref'; r.checked = MODREF === m.n;
+  r.onchange = () => { MODREF = m.n; MODPLAN = null; renderModules(); };
+  rl.append(r, el('span', '', 'główny'));
+  rl.title = 'moduł, z którego liczone są ustawienia pozostałych';
+  h.appendChild(rl);
   if (m.state.saved_at) h.appendChild(el('span', 'sub', 'zapisano ' + m.state.saved_at));
   card.appendChild(h);
 
@@ -1042,6 +1054,107 @@ function moduleCard(m) {
   return card;
 }
 
+
+function deriveBar() {
+  const bar = el('div', 'derivebar');
+  bar.appendChild(el('span', 'dlab', 'Moduł główny:'));
+  const who = MODVIEW.modules.find(m => m.n === MODREF);
+  bar.appendChild(el('b', '', who ? who.label : '—'));
+
+  bar.appendChild(el('span', 'dlab', 'Adresy pozostałych:'));
+  const sel = el('select');
+  sel.add(new Option('kolejno od głównego', 'sequential'));
+  sel.add(new Option('z config.json (pole n)', 'config'));
+  sel.value = MODADDR;
+  sel.onchange = () => { MODADDR = sel.value; };
+  bar.appendChild(sel);
+
+  const btn = el('button', 'primary small', 'Wylicz ustawienia pozostałych');
+  const msg = el('span', 'admmsg');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    msg.className = 'admmsg'; msg.textContent = 'liczenie…';
+    try {
+      MODPLAN = await api('/api/modules/derive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device: DEV.id, ref: MODREF,
+                               state: MODEDIT[MODREF], addressing: MODADDR }),
+      });
+      Object.entries(MODPLAN.states).forEach(([n, st]) => { MODEDIT[+n] = st; });
+      renderModules();
+    } catch (e) {
+      msg.className = 'admmsg bad'; msg.textContent = 'błąd: ' + e.message;
+      btn.disabled = false;
+    }
+  };
+  bar.append(btn, msg);
+
+  const all = el('button', 'ghost small', 'Zapisz wszystkie');
+  all.onclick = async () => {
+    all.disabled = true;
+    msg.className = 'admmsg'; msg.textContent = 'zapisywanie…';
+    try {
+      for (const m of MODVIEW.modules) {
+        MODVIEW = await api('/api/modules', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device: DEV.id, n: m.n, state: MODEDIT[m.n] }),
+        });
+      }
+      MODVIEW.modules.forEach(x => { MODEDIT[x.n] = clone(x.state); });
+      MODVIEW.modules.forEach(x => { MODMSG[x.n] = ['ok', 'zapisano']; });
+      renderModules();
+    } catch (e) {
+      msg.className = 'admmsg bad'; msg.textContent = 'błąd: ' + e.message;
+      all.disabled = false;
+    }
+  };
+  bar.append(all);
+  return bar;
+}
+
+function planBox() {
+  const box = el('div', 'planbox');
+  const who = MODVIEW.modules.find(m => m.n === MODPLAN.ref);
+  box.appendChild(el('div', 'planhead',
+    'Wyliczone z modułu „' + (who ? who.label : MODPLAN.ref) + '", adresowanie: '
+    + (MODPLAN.addressing === 'sequential' ? 'kolejno od głównego' : 'z config.json')));
+
+  const t = el('table', 'adm-t map');
+  t.innerHTML = '<thead><tr><th>Jednostka</th><th>Adres</th><th>SW64 / SW63</th>'
+              + '<th>Terminator SW21 Bit1</th></tr></thead>';
+  const tb = el('tbody'); t.appendChild(tb);
+  MODPLAN.plan.forEach(p => {
+    const tr = el('tr');
+    const nm = el('td', 'pname');
+    nm.innerHTML = p.label + (p.ref ? ' <span class="badge term">główny</span>' : '');
+    tr.appendChild(nm);
+    tr.appendChild(el('td', 'mono2', String(p.addr)));
+    tr.appendChild(el('td', 'mono2', p.sw64 + ' / ' + p.sw63));
+    tr.appendChild(el('td', p.terminator ? 'chg' : 'fixed', p.terminator ? 'ON' : 'OFF'));
+    tb.appendChild(tr);
+  });
+  box.appendChild(t);
+
+  if (MODPLAN.notes.length) {
+    const nt = el('table', 'adm-t');
+    MODPLAN.notes.forEach(n => {
+      const tr = el('tr');
+      tr.appendChild(el('th', n.level === 'bad' ? 'lvbad' : 'lvwarn',
+        n.level === 'bad' ? 'błąd' : 'uwaga'));
+      const td = el('td', n.level === 'bad' ? 'badc' : 'warnc');
+      td.innerHTML = n.text;
+      tr.appendChild(td);
+      nt.appendChild(tr);
+    });
+    box.appendChild(nt);
+  }
+  box.appendChild(el('p', 'admnote',
+    'Wyliczenie tylko wypełniło karty powyżej — nic jeszcze nie jest zapisane. '
+    + 'Bity wspólne dla całej magistrali (SW61 Bit2/3/4, SW62, SW21 Bit2) przeniosły się '
+    + 'z modułu głównego bez zmiany, adres i terminator policzyły się z reguł.'));
+  return box;
+}
+
 function renderModules() {
   const root = $('#modbody');
   root.innerHTML = '';
@@ -1054,9 +1167,11 @@ function renderModules() {
     + 'wewnętrznej. Aplikacja ich nie czyta ani nie ustawia — klikanie tutaj niczego nie wysyła '
     + 'na magistralę. Zapisujesz to, co widzisz na sprzęcie, a panel liczy różnicę względem '
     + 'wartości wymaganej przez dokumentację.'));
+  intro.appendChild(deriveBar());
   const grid = el('div', 'modgrid');
   MODVIEW.modules.forEach(m => grid.appendChild(moduleCard(m)));
   intro.appendChild(grid);
+  if (MODPLAN) intro.appendChild(planBox());
   root.appendChild(intro);
 
   // --- 2. nieprawidlowosci, liczone przez serwer regulami
