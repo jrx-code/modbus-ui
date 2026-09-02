@@ -32,6 +32,10 @@ Site-specific deployment values live outside this repo (`/etc/modbus-ui/config.j
   Modbus protocol reads those back, so `/api/modules` stores what a person reported and
   computes the target from `units[].n` by rules. Never present the stored state as if it
   were measured.
+- **The verdict must name its own blind spot.** `racif.verdict()` returns a `scope` list
+  that says, in the UI, what was and was not examined. It reads recorded switch positions
+  and config fields — it proves nothing about wiring or about whether the switches really
+  sit that way. A green header with no scope statement is a green header that lies.
 - **A finding without a fix is half a finding.** Every entry from `check()` and
   `iface_check()` carries `have`, `want`, `fix` and — where a single value settles it —
   `apply`, built by the `_f()` helper. A rule that can only say "this is wrong" leaves the

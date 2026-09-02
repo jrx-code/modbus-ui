@@ -363,3 +363,26 @@ select.wide{min-width:230px}
   background:#152238;border-radius:4px;padding:1px 6px;margin-right:5px}
 .fix b{color:var(--fg);font-weight:600}
 button.tiny{margin-top:8px;font-size:11px;padding:3px 9px}
+
+/* ---------- werdykt „Sprawdź konfigurację" ---------- */
+.verdict{border:1px solid var(--line2);border-radius:8px;background:#121922;overflow:hidden}
+.verdict.v-ok{border-color:var(--ok)}
+.verdict.v-warn{border-color:var(--warn)}
+.verdict.v-bad{border-color:var(--bad)}
+.vhead{display:flex;align-items:center;gap:10px;padding:11px 14px;background:var(--panel2);
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.vhead strong{font-size:14px}
+.vdot{width:9px;height:9px;border-radius:50%;flex:none}
+.v-ok .vdot{background:var(--ok)} .v-warn .vdot{background:var(--warn)} .v-bad .vdot{background:var(--bad)}
+.v-ok .vhead strong{color:var(--ok)} .v-warn .vhead strong{color:var(--warn)} .v-bad .vhead strong{color:var(--bad)}
+.vsummary{margin:0;padding:11px 14px 4px;font-size:13px;color:var(--fg)}
+.vcols{display:grid;gap:16px;padding:8px 14px 4px;
+  grid-template-columns:repeat(auto-fit,minmax(420px,1fr))}
+.vcol{min-width:0}
+.vcol h4{margin:0 0 7px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+.vcol.vbad h4{color:var(--bad)} .vcol.vwarn h4{color:var(--warn)} .vcol.vok h4{color:var(--ok)}
+.vlist{margin:0;padding-left:18px;font-size:12.5px;color:var(--mut);line-height:1.7}
+.vcol.vok .vlist li{color:var(--fg)}
+.vscope{padding:6px 14px 14px;border-top:1px solid var(--line);margin-top:10px}
+.vscope h4{margin:10px 0 7px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--mut);font-weight:600}

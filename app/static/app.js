@@ -897,6 +897,7 @@ let MODMSG = {};      // n -> [klasa, tekst]
 let MODPLAN = null;   // wynik ostatniego wyliczenia, do pokazania obok
 let MODIFACE = null;  // robocza kopia stanu interfejsu Modbus
 let MODIMSG = null;
+let MODVERDICT = null;  // wynik ostatniego 'Sprawdź konfigurację'
 
 const clone = o => JSON.parse(JSON.stringify(o));
 
@@ -1106,6 +1107,86 @@ function applyToModule(a) {
   renderModules();
 }
 
+// Werdykt liczy serwer regulami z instrukcji. Nagłówek nigdy nie pochodzi z modelu
+// i nigdy nie mówi o sprzęcie — tylko o stanie zapisanym w panelu.
+async function verifyConfig() {
+  const btn = $('#modverify');
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = 'sprawdzam…';
+  try {
+    MODVERDICT = await api('/api/modules/verify?device=' + encodeURIComponent(DEV.id));
+  } catch (e) {
+    MODVERDICT = { level: 'bad', headline: 'Nie udało się sprawdzić', summary: e.message,
+                   works: [], blocks: [], watch: [], counts: {}, scope: [] };
+  }
+  btn.disabled = false;
+  btn.textContent = old;
+  renderModules();
+  const box = $('#verdict');
+  if (box) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function verdictBox() {
+  const v = MODVERDICT;
+  const box = el('section', 'verdict v-' + v.level);
+  box.id = 'verdict';
+
+  const head = el('header', 'vhead');
+  head.appendChild(el('span', 'vdot'));
+  head.appendChild(el('strong', '', v.headline));
+  head.appendChild(el('span', 'grow'));
+  const c = v.counts || {};
+  if (c.bad) head.appendChild(el('span', 'badge bad', c.bad + ' blokuje'));
+  if (c.warn) head.appendChild(el('span', 'badge term', c.warn + ' do sprawdzenia'));
+  if (c.ok) head.appendChild(el('span', 'badge ok', c.ok + ' w porządku'));
+  const x = el('button', 'ghost tiny', 'Zamknij');
+  x.onclick = () => { MODVERDICT = null; renderModules(); };
+  head.appendChild(x);
+  box.appendChild(head);
+
+  box.appendChild(el('p', 'vsummary', v.summary));
+
+  const cols = el('div', 'vcols');
+  const col = (title, cls) => { const d = el('div', 'vcol ' + cls);
+    d.appendChild(el('h4', '', title)); return d; };
+
+  if (v.blocks.length) {
+    const d = col('Co blokuje', 'vbad');
+    const t = el('table', 'adm-t find');
+    v.blocks.forEach(f => t.appendChild(findingRow(f, f.apply && f.apply.n !== undefined
+      ? applyToModule : applyToIface)));
+    d.appendChild(t);
+    cols.appendChild(d);
+  }
+  if (v.watch.length) {
+    const d = col('Do sprawdzenia', 'vwarn');
+    const t = el('table', 'adm-t find');
+    v.watch.forEach(f => t.appendChild(findingRow(f, f.apply && f.apply.n !== undefined
+      ? applyToModule : applyToIface)));
+    d.appendChild(t);
+    cols.appendChild(d);
+  }
+  if (v.works.length) {
+    const d = col('Co jest w porządku', 'vok');
+    const ul = el('ul', 'vlist');
+    v.works.forEach(w => { const li = el('li'); li.innerHTML = w; ul.appendChild(li); });
+    d.appendChild(ul);
+    cols.appendChild(d);
+  }
+  box.appendChild(cols);
+
+  if (v.scope && v.scope.length) {
+    const sc = el('div', 'vscope');
+    sc.appendChild(el('h4', '', 'Co dokładnie zostało sprawdzone'));
+    const ul = el('ul', 'vlist');
+    v.scope.forEach(w => { const li = el('li'); li.innerHTML = w; ul.appendChild(li); });
+    sc.appendChild(ul);
+    box.appendChild(sc);
+  }
+  return box;
+}
+
 function ifaceCard() {
   const v = MODVIEW.iface, st = MODIFACE;
   const card = el('div', 'ifacecard');
@@ -1298,6 +1379,7 @@ function renderModules() {
   const root = $('#modbody');
   root.innerHTML = '';
   if (!MODVIEW) { root.appendChild(el('p', 'admnote', 'wczytywanie…')); return; }
+  if (MODVERDICT) root.appendChild(verdictBox());
 
   const intro = el('div', 'adm wide');
   intro.appendChild(el('h3', '', '1 · Interfejs Modbus i adaptery w jednostkach'));
@@ -1419,6 +1501,7 @@ try {
 } catch {}
 $('#adminbtn').onclick = adminToggle;
 $('#modbtn').onclick = modToggle;
+$('#modverify').onclick = verifyConfig;
 $('#modclose').onclick = () => {
   $('#modules').classList.add('hidden');
   $('#modbtn').classList.remove('on');

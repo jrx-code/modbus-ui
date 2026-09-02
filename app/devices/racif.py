@@ -745,3 +745,133 @@ def derive(units: list[dict], iface_state: dict, cfg_slave: int) -> dict:
     return {"states": states, "notes": notes, "why": why, "plan": plan,
             "iface": iface, "baud": iface_baud(iface), "slave": iface["sw1"],
             "cfg_slave": cfg_slave}
+
+
+# --------------------------------------------------------------------------- werdykt
+
+# Ramkowanie wynikajace z trybu pracy bramki. EW11 przepuszcza bajty bez konwersji,
+# Waveshare w trybie 5 sam robi MBAP <-> RTU. Zrodlo: instrukcje bramek, sekcja 2
+# trybu administracyjnego.
+FRAMING_BY_GATEWAY = {"ew11": "rtuovertcp", "waveshare": "tcp"}
+
+# Minimalny timeout przy 9600 bps. Ramka RTU nie niesie dlugosci, wiec odbior konczy
+# sie cisza na linii albo poprawnym CRC - ponizej tego progu urywa sie w polowie ramki.
+MIN_TIMEOUT_9600 = 2.5
+
+
+def config_check(cfg: dict, iface: dict) -> list[dict]:
+    """Spojnosc config.json z tym, co stoi na sprzecie i w bramce."""
+    out = []
+    gw = cfg.get("gateway_type") or "generic"
+    want_framing = FRAMING_BY_GATEWAY.get(gw)
+    if want_framing and cfg.get("framing") != want_framing:
+        out.append(_f("warn", "framing",
+                      f"bramka jest opisana jako <span class='mono'>{gw}</span>, a jej tryb pracy "
+                      f"daje ramkowanie <span class='mono'>{want_framing}</span>. W configu stoi "
+                      f"<span class='mono'>{cfg.get('framing')}</span>.",
+                      have=str(cfg.get("framing")), want=want_framing,
+                      fix="Albo zmien <i>Ramkowanie</i> w trybie administracyjnym, albo popraw "
+                          "<i>Typ bramki</i>, jesli to nie ten model. Zle ramkowanie daje same "
+                          "timeouty, bo bramka dostaje naglowek, ktorego nie rozumie."))
+
+    baud = iface_baud(iface)
+    to = float(cfg.get("timeout") or 0)
+    if baud <= 9600 and to < MIN_TIMEOUT_9600:
+        out.append(_f("warn", "timeout",
+                      f"timeout <span class='mono'>{to}</span> s przy "
+                      f"<span class='mono'>{baud}</span> bps. Ramka RTU nie niesie dlugosci, wiec "
+                      "odbior konczy sie cisza na linii — przy krotszym oknie ramka urywa sie "
+                      "w polowie.",
+                      have=f"{to} s", want=f"≥ {MIN_TIMEOUT_9600} s",
+                      fix=f"Ustaw <i>Timeout</i> na co najmniej <span class='mono'>{MIN_TIMEOUT_9600}</span> s "
+                          "w trybie administracyjnym, albo podnies predkosc na "
+                          "<span class='mono'>SW3</span> i w bramce."))
+
+    if cfg.get("write_enabled"):
+        out.append(_f("warn", "zapis",
+                      "zapis rejestrow jest wlaczony, wiec panel moze zmienic stan klimatyzacji.",
+                      have="wlaczony", want="decyzja swiadoma",
+                      fix="Dopoki adaptery nie sa zamontowane, zapis nie ma na co dzialac. "
+                          "Po montazu przemysl, czy panel bez uwierzytelnienia ma miec te mozliwosc — "
+                          "wylacza sie ja polem <i>write_enabled</i> w "
+                          "<span class='mono'>config.json</span>."))
+    return out
+
+
+def verdict(units: list[dict], states: dict, iface: dict, cfg: dict) -> dict:
+    """Jedna odpowiedz na pytanie „czy to jest dobrze ustawione".
+
+    Liczona wylacznie z regul, nigdy z modelu. Dotyczy stanu **zapisanego** w panelu,
+    a nie zmierzonego na magistrali — te granice trzeba postawic wprost, bo inaczej
+    zielony naglowek zaczyna udawac dowod, ze sprzet dziala.
+    """
+    fi = iface_check(iface, cfg["slave"])
+    fa = check(units, states)
+    fc = config_check(cfg, iface)
+    everything = fi + fa + fc
+
+    blocks = [f for f in everything if f["level"] == "bad"]
+    watch = [f for f in everything if f["level"] == "warn"]
+
+    works = []
+    if iface["ccid"] == "old":
+        works.append("Interfejs jest na <span class='mono'>old controller</span>, czyli w trybie "
+                     "wymaganym przy adapterach RAC [SM str. 16].")
+    if iface["sw1"] and iface["sw1"] == cfg["slave"]:
+        works.append(f"Adres slave zgadza sie po obu stronach: <span class='mono'>SW1 = "
+                     f"{iface['sw1']}</span> i tyle samo w <span class='mono'>config.json</span>.")
+    if not iface["sw6"]:
+        works.append("<span class='mono'>SW6 = open</span> na interfejsie, wiec magistrale Uh "
+                     "zamyka adapter, tak jak wymaga instrukcja [SM str. 29].")
+    if iface["sw5"] == (iface["sw1"] == 1):
+        works.append("Terminator RS-485 (<span class='mono'>SW5</span>) stoi zgodnie z adresem "
+                     "interfejsu [SM str. 29].")
+    terms = [u["n"] for u in units if states[str(u["n"])]["sw21"][0]]
+    if len(terms) == 1 and terms[0] == min(u["n"] for u in units):
+        works.append("Dokladnie jeden adapter zamyka magistrale Uh i jest to ten o najnizszym "
+                     "adresie [OM str. 2].")
+    addrs = [address_of(states[str(u["n"])]) for u in units]
+    if addrs and all(ADDR_MIN <= a <= ADDR_MAX for a in addrs) and len(set(addrs)) == len(addrs):
+        works.append("Adresy adapterow sa unikalne i miesza sie w zakresie "
+                     f"<span class='mono'>{ADDR_MIN}-{ADDR_MAX}</span>.")
+    if all(states[str(u["n"])]["sw61"][1] and states[str(u["n"])]["sw61"][2] for u in units):
+        works.append("Wszystkie adaptery maja wymuszony TU2C-LINK "
+                     "(<span class='mono'>SW61 Bit2 i Bit3 = ON</span>).")
+
+    if blocks:
+        level, headline = "bad", "Konfiguracja nie zadziala"
+        summary = (f"{len(blocks)} " + _plural(len(blocks), "rzecz blokuje", "rzeczy blokuja",
+                                               "rzeczy blokuje")
+                   + " uruchomienie. Napraw je, zanim wyslesz kogokolwiek na miejsce.")
+    elif watch:
+        level, headline = "warn", "Konfiguracja jest poprawna, ale z zastrzezeniami"
+        summary = ("Nic nie blokuje uruchomienia. " + str(len(watch)) + " "
+                   + _plural(len(watch), "rzecz warta", "rzeczy warte", "rzeczy wartych")
+                   + " sprawdzenia przed montazem.")
+    else:
+        level, headline = "ok", "Konfiguracja zgodna z dokumentacja"
+        summary = ("Wszystkie reguly z instrukcji przechodza dla zapisanego stanu "
+                   "interfejsu i adapterow.")
+
+    return {
+        "level": level, "headline": headline, "summary": summary,
+        "works": works, "blocks": blocks, "watch": watch,
+        "counts": {"bad": len(blocks), "warn": len(watch), "ok": len(works),
+                   "units": len(units)},
+        "scope": [
+            "Sprawdzony zostal <b>stan zapisany w panelu</b>: przelaczniki interfejsu, "
+            "przelaczniki adapterow i pola z <span class='mono'>config.json</span>.",
+            "<b>Nie zostalo sprawdzone</b>, czy przelaczniki faktycznie tak stoja na plytkach — "
+            "zaden protokol tego nie odczytuje. Panel zna tylko to, co ktos wpisal.",
+            "<b>Nie zostala sprawdzona lacznosc</b> z bramka ani z magistrala. Od tego jest "
+            "<i>Diagnostyka</i>, ktora wysyla ramki i pokazuje odpowiedzi.",
+        ],
+    }
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    if n == 1:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many

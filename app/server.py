@@ -7,6 +7,7 @@ Stdlib only. Serwuje statyczny frontend i JSON API:
     POST /api/write                zapis pojedynczego rejestru
     GET  /api/diag?device=ID       liczniki diagnostyczne interfejsu
     GET  /api/modules?device=ID    przelaczniki adapterow RAC I/F: cel, stan, roznice
+    GET  /api/modules/verify?device=ID  werdykt: czy konfiguracja jest poprawna
     POST /api/modules              zapis stanu przelacznikow jednego adaptera
     POST /api/interface            zapis stanu przelacznikow interfejsu Modbus
     POST /api/modules/derive       rozpisanie adapterow na podstawie interfejsu
@@ -716,6 +717,17 @@ def modules_view(dev: dict) -> dict:
     return view
 
 
+def verify_config(dev: dict) -> dict:
+    """Jedna odpowiedz na pytanie, czy to jest dobrze ustawione. Nie dotyka magistrali."""
+    cfg = {"slave": dev["slave"], "framing": dev.get("framing"),
+           "gateway_type": (dev.get("gateway") or {}).get("type"),
+           "timeout": dev.get("timeout"), "write_enabled": dev.get("write_enabled")}
+    out = racif.verdict(dev["units"], module_states(dev), iface_state(dev), cfg)
+    log(f"WERDYKT {dev['id']}: {out['level']} "
+        f"(blokad {out['counts']['bad']}, uwag {out['counts']['warn']})")
+    return out
+
+
 def save_iface(dev: dict, state) -> dict:
     clean = racif.iface_normalize(state)
     clean["saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -831,6 +843,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(404, {"error": "nieznane urzadzenie"})
                     return
                 self._json(200, modules_view(dev))
+            elif u.path == "/api/modules/verify":
+                dev = CFG["byid"].get(q.get("device", [""])[0])
+                if not dev:
+                    self._json(404, {"error": "nieznane urzadzenie"})
+                    return
+                self._json(200, verify_config(dev))
             elif u.path == "/api/trace/stream":
                 dev = CFG["byid"].get(q.get("device", [""])[0])
                 if not dev:

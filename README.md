@@ -65,6 +65,14 @@ each line says which interface setting forced it, with the manual page that says
 
 ![Adapter switches](docs/img/05-modules.png)
 
+**Check the configuration** answers the only question that matters before someone drives to
+the site: does this work or not. One verdict computed from the rules — what blocks it, what
+is worth a second look, what is already right — and, just as important, an explicit list of
+what the check did *not* look at. It reads recorded switch positions and config fields; it
+does not prove a single wire is connected. The chain diagnostic is what sends frames.
+
+![Configuration verdict](docs/img/06-verify.png)
+
 ## Design notes
 
 **No dependencies.** Python standard library only — `http.server`, `socket`, `struct`.
@@ -123,6 +131,7 @@ deploy/
 | `GET /api/modules?device=ID` | adapter switch spec, target values, recorded state, diff |
 | `POST /api/modules` | record the switch state found on one adapter board |
 | `POST /api/interface` | record the switch state of the interface module |
+| `GET /api/modules/verify?device=ID` | verdict on the recorded configuration: blockers, warnings, what is right |
 | `POST /api/modules/derive` | derive the adapter boards from the interface module (no writes) |
 | `GET /api/audit` | last 100 writes |
 
