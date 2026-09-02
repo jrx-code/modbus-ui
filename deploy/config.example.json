@@ -30,7 +30,7 @@
   "ai": {
     "enabled": true,
     "url": "http://192.0.2.20:11434",
-    "model": "qwen2.5:3b-instruct-q5_K_M",
-    "timeout": 45
+    "model": "qwen2.5:14b-instruct-q4_K_M",
+    "timeout": 90
   }
 }

@@ -32,6 +32,21 @@ Site-specific deployment values live outside this repo (`/etc/modbus-ui/config.j
 - **RTU frames carry no length field** — `_recv_frame` reads until the line goes
   quiet or the CRC checks out. A 2.5 s timeout is the minimum at 9600 baud.
 
+## Local model for the verdict comment
+
+Benchmarked on the real fact list (2026-09-02, same prompt, warm model):
+
+| Model | Time | Notes |
+|---|---|---|
+| `qwen2.5:14b-instruct-q4_K_M` | **2.7 s** | best Polish, respects the 4-sentence limit, no invented facts — **in use** |
+| `qwen2.5:3b-instruct-q5_K_M` | 0.9 s | fastest, but stilted phrasing |
+| `mistral-nemo:12b` | 8.9 s | ignored the length limit, ran into the token cap mid-word, garbled one fact |
+| `gemma4-12b-uncensored` | 12.0 s | returned an **empty** response; a trivial one-sentence prompt then failed to finish within 2 min |
+| `gemma4:12b` | — | request timed out |
+
+The verdict itself never depends on this — it is computed from the trace facts by
+rules. The model only rewrites them, and any failure degrades to a note.
+
 ## Testing without touching the hardware
 
 Function `0x08/0x00` (loopback) and `0x08/0x0C` (CRC error counter) are answered by
