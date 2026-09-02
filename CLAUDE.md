@@ -27,6 +27,17 @@ Site-specific deployment values live outside this repo (`/etc/modbus-ui/config.j
 - **`main` uses `margin: 0 auto`**, and auto margins on the cross axis disable
   `align-items: stretch`. In bottom-dock mode the explicit `width: 100%` is what
   keeps the cards full width — do not "clean it up".
+- **RAC I/F switches are write-only from the human side.** `devices/racif.py` describes
+  the adapter board (SW21/SW61/SW62 DIP, SW63/SW64 rotary, SW65 push). Nothing in the
+  Modbus protocol reads those back, so `/api/modules` stores what a person reported and
+  computes the target from `units[].n` by rules. Never present the stored state as if it
+  were measured.
+- **The terminator belongs to the lowest indoor address, not to unit 1.** `board()` takes
+  the flag from `min(units[].n)`. Hardcoding unit 1 breaks the moment the addressing plan
+  changes.
+- **Central address 0 is invalid, not "unset".** With `Central controller ID = old
+  controller` the range is 1-64 (SM p. 33). A factory-fresh adapter reports 0 and looks
+  harmless in the UI; the rule in `check()` is what makes it visible.
 - **Serial gateways dislike parallel sessions.** `ModbusClient` holds a
   `threading.Lock` and opens a fresh connection per transaction. Keep the lock.
 - **RTU frames carry no length field** — `_recv_frame` reads until the line goes

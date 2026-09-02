@@ -885,6 +885,274 @@ function adminToggle() {
   if (!closed) renderAdmin();
 }
 
+// ---------------------------------------------------------------- adaptery RAC I/F
+
+// Przelaczniki sa fizyczne - aplikacja ich nie czyta i nie ustawia. Panel trzyma to,
+// co czlowiek zastal na plytce, a wartosc docelowa liczy serwer z adresow w config.json.
+// Zadna z tych operacji nie wysyla ramki na magistrale.
+
+let MODVIEW = null;   // odpowiedz /api/modules
+let MODEDIT = {};     // robocza kopia stanu, n -> {sw21,sw61,sw62,sw63,sw64}
+let MODMSG = {};      // n -> [klasa, tekst]
+
+const clone = o => JSON.parse(JSON.stringify(o));
+
+async function modLoad() {
+  MODVIEW = await api('/api/modules?device=' + encodeURIComponent(DEV.id));
+  MODEDIT = {};
+  MODVIEW.modules.forEach(m => { MODEDIT[m.n] = clone(m.state); });
+  renderModules();
+}
+
+function modDiff(m) {
+  const st = MODEDIT[m.n], out = [];
+  m.board.forEach(sw => {
+    if (sw.kind === 'dip') {
+      sw.bits.forEach(b => {
+        const have = !!st[sw.id][b.i - 1];
+        if (have !== b.target)
+          out.push(`${sw.name} Bit${b.i}: ${have ? 'ON' : 'OFF'} → ${b.target ? 'ON' : 'OFF'}`);
+      });
+    } else if (sw.kind === 'rotary') {
+      if (st[sw.id] !== sw.target) out.push(`${sw.name}: ${st[sw.id]} → ${sw.target}`);
+    }
+  });
+  return out;
+}
+
+function modAddress(m) {
+  const st = MODEDIT[m.n];
+  return (st.sw61[0] ? 100 : 0) + st.sw64 * 10 + st.sw63;
+}
+
+function dipRow(m, sw) {
+  const st = MODEDIT[m.n];
+  const row = el('div', 'dipsw');
+  const head = el('div', 'dipname');
+  head.appendChild(el('b', '', sw.name));
+  head.appendChild(el('span', 'sub', sw.title.split('—').pop().trim()));
+  row.appendChild(head);
+
+  const bank = el('div', 'dipbank');
+  sw.bits.forEach(b => {
+    const cell = el('div', 'dipcell');
+    const btn = el('button', 'dip');
+    const on = !!st[sw.id][b.i - 1];
+    btn.classList.add(on ? 'on' : 'off');
+    if (on !== b.target) btn.classList.add('wrong');
+    btn.title = `Bit${b.i} — docelowo ${b.target ? 'ON' : 'OFF'}`;
+    btn.innerHTML = '<span class="lever"></span>';
+    btn.onclick = () => { st[sw.id][b.i - 1] = !st[sw.id][b.i - 1]; renderModules(); };
+    cell.appendChild(btn);
+    cell.appendChild(el('span', 'dipno', String(b.i)));
+    cell.appendChild(el('span', 'dipval' + (on !== b.target ? ' wrongtxt' : ''), on ? 'ON' : 'OFF'));
+    bank.appendChild(cell);
+  });
+  row.appendChild(bank);
+  return row;
+}
+
+function rotaryRow(m, sw) {
+  const st = MODEDIT[m.n];
+  const row = el('div', 'dipsw');
+  const head = el('div', 'dipname');
+  head.appendChild(el('b', '', sw.name));
+  head.appendChild(el('span', 'sub', sw.title.split('—').pop().trim()));
+  row.appendChild(head);
+
+  const box = el('div', 'rotbox');
+  const sel = el('select', 'rot' + (st[sw.id] !== sw.target ? ' wrongsel' : ''));
+  for (let i = 0; i <= 9; i++) sel.add(new Option(String(i), String(i)));
+  sel.value = String(st[sw.id]);
+  sel.onchange = () => { st[sw.id] = +sel.value; renderModules(); };
+  box.appendChild(sel);
+  box.appendChild(el('span', 'dipval' + (st[sw.id] !== sw.target ? ' wrongtxt' : ''),
+    'docelowo ' + sw.target));
+  row.appendChild(box);
+  return row;
+}
+
+function moduleCard(m) {
+  const card = el('div', 'modcard');
+
+  const h = el('header', 'modhead');
+  h.appendChild(el('strong', '', m.label));
+  const addr = modAddress(m);
+  const abad = addr !== m.n;
+  h.appendChild(el('span', 'badge ' + (abad ? 'bad' : 'ok'), 'adres ' + addr));
+  if (m.terminator) h.appendChild(el('span', 'badge term', 'terminator Uh'));
+  h.appendChild(el('span', 'grow'));
+  if (m.state.saved_at) h.appendChild(el('span', 'sub', 'zapisano ' + m.state.saved_at));
+  card.appendChild(h);
+
+  const body = el('div', 'modbodyin');
+  m.board.forEach(sw => {
+    if (sw.kind === 'dip') body.appendChild(dipRow(m, sw));
+    else if (sw.kind === 'rotary') body.appendChild(rotaryRow(m, sw));
+  });
+  card.appendChild(body);
+
+  const d = modDiff(m);
+  const dbox = el('div', 'moddiff' + (d.length ? '' : ' good'));
+  if (!d.length) {
+    dbox.appendChild(el('span', '', 'Zgodne z dokumentacją — nic do przestawienia.'));
+  } else {
+    dbox.appendChild(el('span', 'difftitle', `Do przestawienia (${d.length}):`));
+    const ul = el('ul');
+    d.forEach(x => ul.appendChild(el('li', 'mono', x)));
+    dbox.appendChild(ul);
+  }
+  card.appendChild(dbox);
+
+  const bar = el('div', 'modbar');
+  const save = el('button', 'primary small', 'Zapisz stan zastany');
+  const goal = el('button', 'ghost small', 'Wypełnij docelowymi');
+  const back = el('button', 'ghost small', 'Cofnij zmiany');
+  const msg = el('span', 'admmsg');
+  if (MODMSG[m.n]) { msg.className = 'admmsg ' + MODMSG[m.n][0]; msg.textContent = MODMSG[m.n][1]; }
+
+  goal.onclick = () => {
+    const st = MODEDIT[m.n];
+    m.board.forEach(sw => {
+      if (sw.kind === 'dip') sw.bits.forEach(b => { st[sw.id][b.i - 1] = b.target; });
+      else if (sw.kind === 'rotary') st[sw.id] = sw.target;
+    });
+    MODMSG[m.n] = ['', 'wypełnione wartościami docelowymi — sprawdź płytkę i zapisz'];
+    renderModules();
+  };
+  back.onclick = () => { MODEDIT[m.n] = clone(m.state); delete MODMSG[m.n]; renderModules(); };
+  save.onclick = async () => {
+    save.disabled = goal.disabled = back.disabled = true;
+    msg.className = 'admmsg'; msg.textContent = 'zapisywanie…';
+    try {
+      MODVIEW = await api('/api/modules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device: DEV.id, n: m.n, state: MODEDIT[m.n] }),
+      });
+      MODVIEW.modules.forEach(x => { MODEDIT[x.n] = clone(x.state); });
+      MODMSG[m.n] = ['ok', 'zapisano'];
+      renderModules();
+    } catch (e) {
+      MODMSG[m.n] = ['bad', 'błąd: ' + e.message];
+      renderModules();
+    }
+  };
+  bar.append(save, goal, back, msg);
+  card.appendChild(bar);
+  return card;
+}
+
+function renderModules() {
+  const root = $('#modbody');
+  root.innerHTML = '';
+  if (!MODVIEW) { root.appendChild(el('p', 'admnote', 'wczytywanie…')); return; }
+
+  const intro = el('div', 'adm wide');
+  intro.appendChild(el('h3', '', '1 · Stan przełączników w jednostkach wewnętrznych'));
+  intro.appendChild(el('p', 'admnote',
+    'Przełączniki siedzą na płytce adaptera TCB-SSRL011UUP-E wpiętego w złącze CN50 jednostki '
+    + 'wewnętrznej. Aplikacja ich nie czyta ani nie ustawia — klikanie tutaj niczego nie wysyła '
+    + 'na magistralę. Zapisujesz to, co widzisz na sprzęcie, a panel liczy różnicę względem '
+    + 'wartości wymaganej przez dokumentację.'));
+  const grid = el('div', 'modgrid');
+  MODVIEW.modules.forEach(m => grid.appendChild(moduleCard(m)));
+  intro.appendChild(grid);
+  root.appendChild(intro);
+
+  // --- 2. nieprawidlowosci, liczone przez serwer regulami
+  const s2 = el('div', 'adm wide');
+  s2.appendChild(el('h3', '', '2 · Nieprawidłowości w stanie zapisanym'));
+  const bad = MODVIEW.checks;
+  if (!bad.length) {
+    s2.appendChild(el('p', 'admnote', 'Reguły z instrukcji nie zgłaszają nic do zapisanego stanu.'));
+  } else {
+    const t = el('table', 'adm-t');
+    bad.forEach(c => {
+      const tr = el('tr');
+      const th = el('th', c.level === 'bad' ? 'lvbad' : 'lvwarn', c.who);
+      tr.appendChild(th);
+      const td = el('td', c.level === 'bad' ? 'badc' : 'warnc');
+      td.innerHTML = c.text;
+      tr.appendChild(td);
+      t.appendChild(tr);
+    });
+    s2.appendChild(t);
+    s2.appendChild(el('p', 'admnote',
+      'Lista dotyczy stanu zapisanego na serwerze, nie tego, co masz w tej chwili '
+      + 'poklikane na ekranie. Zapisz, żeby ją odświeżyć.'));
+  }
+  root.appendChild(s2);
+
+  // --- 3. legenda przelacznikow
+  const s3 = el('div', 'adm wide');
+  s3.appendChild(el('h3', '', '3 · Co robi każdy przełącznik'));
+  const ref = MODVIEW.modules[0];
+  ref.board.forEach(sw => {
+    const blk = el('div', 'swref');
+    const hd = el('div', 'swrefhead');
+    hd.appendChild(el('b', '', sw.name));
+    hd.appendChild(el('span', 'swkind', { dip: 'DIP', rotary: 'pokrętło skokowe 0-9',
+                                          push: 'przycisk' }[sw.kind]));
+    hd.appendChild(el('span', 'grow'));
+    hd.appendChild(el('span', 'src', sw.src));
+    blk.appendChild(hd);
+    blk.appendChild(el('div', 'swtitle', sw.title));
+    if (sw.bits) {
+      const t = el('table', 'adm-t');
+      sw.bits.forEach(b => {
+        const tr = el('tr');
+        tr.appendChild(el('th', '', 'Bit' + b.i));
+        const td = el('td');
+        td.innerHTML = b.desc;
+        tr.appendChild(td);
+        t.appendChild(tr);
+      });
+      blk.appendChild(t);
+    }
+    if (sw.table) {
+      const t = el('table', 'adm-t map');
+      const head = el('tr');
+      sw.table[0].forEach(x => head.appendChild(el('th', '', x)));
+      t.appendChild(head);
+      sw.table.slice(1).forEach(r => {
+        const tr = el('tr');
+        r.forEach((x, i) => tr.appendChild(el('td', i < 3 ? 'mono2' : 'pname', x)));
+        t.appendChild(tr);
+      });
+      blk.appendChild(t);
+    }
+    if (sw.note) { const p = el('p', 'admnote'); p.innerHTML = sw.note; blk.appendChild(p); }
+    s3.appendChild(blk);
+  });
+  root.appendChild(s3);
+
+  // --- 4. po zmianie
+  const s4 = el('div', 'adm wide');
+  s4.appendChild(el('h3', '', '4 · Po przestawieniu przełączników'));
+  const ol = el('ol', 'aftlist');
+  MODVIEW.after.forEach(x => { const li = el('li'); li.innerHTML = x; ol.appendChild(li); });
+  s4.appendChild(ol);
+  const t5 = el('table', 'adm-t');
+  MODVIEW.leds.forEach(([name, desc]) => {
+    const tr = el('tr');
+    tr.appendChild(el('th', '', name));
+    const td = el('td'); td.innerHTML = desc; tr.appendChild(td);
+    t5.appendChild(tr);
+  });
+  s4.appendChild(t5);
+  root.appendChild(s4);
+}
+
+function modToggle() {
+  const p = $('#modules');
+  const closed = p.classList.toggle('hidden');
+  $('#modbtn').classList.toggle('on', !closed);
+  if (!closed) modLoad().catch(e => {
+    $('#modbody').innerHTML = '';
+    $('#modbody').appendChild(el('p', 'admnote', 'błąd: ' + e.message));
+  });
+}
+
 // ---------------------------------------------------------------- zdarzenia
 
 $('#refresh').onclick = refresh;
@@ -902,6 +1170,11 @@ try {
   if (saved) $('#termpos').value = saved;
 } catch {}
 $('#adminbtn').onclick = adminToggle;
+$('#modbtn').onclick = modToggle;
+$('#modclose').onclick = () => {
+  $('#modules').classList.add('hidden');
+  $('#modbtn').classList.remove('on');
+};
 $('#adminclose').onclick = () => {
   $('#admin').classList.add('hidden');
   $('#adminbtn').classList.remove('on');

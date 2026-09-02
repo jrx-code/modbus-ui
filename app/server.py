@@ -6,6 +6,8 @@ Stdlib only. Serwuje statyczny frontend i JSON API:
     GET  /api/read?device=ID       odczyt wszystkich rejestrow urzadzenia
     POST /api/write                zapis pojedynczego rejestru
     GET  /api/diag?device=ID       liczniki diagnostyczne interfejsu
+    GET  /api/modules?device=ID    przelaczniki adapterow RAC I/F: cel, stan, roznice
+    POST /api/modules              zapis stanu przelacznikow jednego adaptera
     GET  /api/audit                ostatnie zapisy
 """
 
@@ -24,13 +26,14 @@ from urllib.parse import urlparse, parse_qs
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modbus import ModbusClient, ModbusError, TXLOG  # noqa: E402
-from devices import toshiba  # noqa: E402
+from devices import toshiba, racif  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/modbus-ui/config.json")
 AUDIT_FILE = os.environ.get("AUDIT_FILE", "/var/lib/modbus-ui/audit.jsonl")
 OVERRIDE_FILE = os.environ.get("OVERRIDE_FILE", "/var/lib/modbus-ui/overrides.json")
+MODULES_FILE = os.environ.get("MODULES_FILE", "/var/lib/modbus-ui/modules.json")
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "8080"))
 
 FUNC = {"coil": 0x01, "discrete": 0x02, "holding": 0x03, "input": 0x04}
@@ -657,6 +660,74 @@ def reset_config(dev_id: str) -> dict:
     return {"ok": True, "device": public_device(CFG["byid"][dev_id])}
 
 
+# --------------------------------------------------------------------------- adaptery RAC I/F
+
+# To sa fizyczne przelaczniki na plytce adaptera. Aplikacja nie ma jak ich odczytac
+# ani ustawic - trzyma tylko to, co czlowiek zastal na sprzecie, i liczy roznice
+# wzgledem wartosci wymaganej przez dokumentacje. Zero ruchu na magistrali.
+
+def load_modules() -> dict:
+    try:
+        with open(MODULES_FILE) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_modules(data: dict) -> None:
+    os.makedirs(os.path.dirname(MODULES_FILE), exist_ok=True)
+    tmp = MODULES_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, MODULES_FILE)
+
+
+def module_states(dev: dict) -> dict:
+    """Stan wszystkich adapterow urzadzenia, uzupelniony o fabryczny tam, gdzie brak wpisu."""
+    stored = load_modules().get(dev["id"]) or {}
+    out = {}
+    for u in dev["units"]:
+        key = str(u["n"])
+        out[key] = racif.normalize(stored.get(key))
+        saved = (stored.get(key) or {}).get("saved_at")
+        if saved:
+            out[key]["saved_at"] = saved
+    return out
+
+
+def modules_view(dev: dict) -> dict:
+    view = racif.build(dev["units"], module_states(dev))
+    view["device"] = dev["id"]
+    return view
+
+
+def save_module(dev: dict, n, state) -> dict:
+    numbers = {u["n"] for u in dev["units"]}
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        raise ValueError("numer jednostki musi byc liczba")
+    if n not in numbers:
+        raise ValueError(f"jednostka {n} nie nalezy do urzadzenia {dev['id']}")
+    clean = racif.normalize(state)
+    clean["saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    data = load_modules()
+    data.setdefault(dev["id"], {})[str(n)] = clean
+    save_modules(data)
+
+    desc = (f"SW21 {_bits(clean['sw21'])} · SW61 {_bits(clean['sw61'])} · "
+            f"SW62 {_bits(clean['sw62'])} · SW64={clean['sw64']} SW63={clean['sw63']}")
+    log(f"ADAPTER {dev['id']}/{n}: {desc}")
+    TXLOG.note(dev["id"], f"zapis stanu przelacznikow adaptera RAC I/F jednostki {n}: {desc}", "info")
+    return modules_view(dev)
+
+
+def _bits(vals: list) -> str:
+    return "/".join("ON" if v else "OFF" for v in vals)
+
+
 # --------------------------------------------------------------------------- HTTP
 
 def public_device(dev: dict) -> dict:
@@ -718,6 +789,12 @@ class Handler(BaseHTTPRequestHandler):
                     except (ModbusError, OSError) as exc:
                         out[label] = f"blad: {exc}"
                 self._json(200, out)
+            elif u.path == "/api/modules":
+                dev = CFG["byid"].get(q.get("device", [""])[0])
+                if not dev:
+                    self._json(404, {"error": "nieznane urzadzenie"})
+                    return
+                self._json(200, modules_view(dev))
             elif u.path == "/api/trace/stream":
                 dev = CFG["byid"].get(q.get("device", [""])[0])
                 if not dev:
@@ -780,6 +857,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, preview_write(dev, body["key"], body["value"]))
             elif u.path == "/api/config":
                 self._json(200, apply_config(body["device"], body.get("changes") or {}))
+            elif u.path == "/api/modules":
+                self._json(200, save_module(dev, body.get("n"), body.get("state")))
             elif u.path == "/api/config/reset":
                 self._json(200, reset_config(body["device"]))
             elif u.path == "/api/write":

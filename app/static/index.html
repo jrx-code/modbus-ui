@@ -22,6 +22,7 @@
       <option value="60">60 s</option>
     </select>
   </label>
+  <button id="modbtn" class="ghost" title="Przełączniki adapterów RAC I/F w jednostkach wewnętrznych">Adaptery</button>
   <button id="adminbtn" class="ghost">Tryb administracyjny</button>
   <button id="tracebtn" class="ghost">Diagnostyka</button>
   <button id="termbtn" class="ghost" title="Podgląd ramek na żywo">Terminal</button>
@@ -44,6 +45,16 @@
       <button id="adminclose" class="ghost small">Zamknij</button>
     </header>
     <div id="adminbody"></div>
+  </section>
+
+  <section id="modules" class="panel hidden">
+    <header class="panel-head">
+      <strong>Adaptery RAC I/F — przełączniki na płytce</strong>
+      <span class="note">TCB-SSRL011UUP-E, jeden w każdej jednostce wewnętrznej</span>
+      <div class="grow"></div>
+      <button id="modclose" class="ghost small">Zamknij</button>
+    </header>
+    <div id="modbody"></div>
   </section>
 
   <section id="trace" class="panel hidden">

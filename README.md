@@ -43,6 +43,16 @@ addresses side by side.
 
 ![Registers](docs/img/04-registers.png)
 
+### Hardware switch planner
+
+Some devices only reach the bus once physical DIP switches and rotary selectors are set
+correctly on an adapter board, and no protocol can read those back. This view holds the
+state a human found on the board, computes the required state from the addresses in the
+config, and lists the exact moves between the two. Every rule is quoted from the vendor
+manual with a page reference; nothing here talks to the bus.
+
+![Adapter switches](docs/img/05-modules.png)
+
 ## Design notes
 
 **No dependencies.** Python standard library only — `http.server`, `socket`, `struct`.
@@ -62,6 +72,12 @@ Enum values and numeric bounds are validated server-side. Before anything is sen
 UI shows a confirmation dialog with the **exact frame in hex**, and every write is
 appended to an audit log.
 
+**Physical state is data, not guesswork.** The adapter switch view never claims to read
+hardware it cannot read. It stores what a human reported, derives the target from the
+configured addresses by rules, and reports the difference. Validation (address range,
+duplicate addresses, more than one bus terminator, switch combinations the manual marks
+`N/A`) is computed server-side from those rules, with a manual page cited on every finding.
+
 **Non-invasive diagnostics.** Reachability is proven with function `0x08` sub `0x00`
 (loopback) and the `0x08` error counters, which are answered by the Modbus interface
 itself and never touch the field bus or the appliances.
@@ -73,6 +89,7 @@ app/
   modbus.py            Modbus client, CRC, transaction ring buffer
   server.py            HTTP + JSON API, read batching, write validation, chain trace
   devices/toshiba.py   register map (generated per indoor unit)
+  devices/racif.py     adapter board switches: spec, target values, validation rules
   static/              frontend — no framework, no build step
 deploy/
   config.example.json  device definitions
@@ -91,6 +108,8 @@ deploy/
 | `GET /api/log?since=N` | transaction ring buffer (600 entries) — feeds the terminal |
 | `POST /api/preview` | validate a write and return the frame **without sending it** |
 | `POST /api/write` | perform the write (whitelist + audit) |
+| `GET /api/modules?device=ID` | adapter switch spec, target values, recorded state, diff |
+| `POST /api/modules` | record the switch state found on one adapter board |
 | `GET /api/audit` | last 100 writes |
 
 ## Install
