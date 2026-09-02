@@ -51,6 +51,12 @@ state a human found on the board, computes the required state from the addresses
 config, and lists the exact moves between the two. Every rule is quoted from the vendor
 manual with a page reference; nothing here talks to the bus.
 
+Every finding carries its own fix: the value found, the value the manual requires, and the
+key sequence that gets from one to the other — for a switch that takes a procedure rather
+than a flip, the whole procedure, step by step. A one-click button writes the target into
+the card, which is a record of intent until the board is actually changed and the state
+saved.
+
 The chain has a head: the interface module the RS-485 gateway plugs into. Record its
 switches once and **Compute the adapter settings** derives every adapter board behind it,
 because that module is what fixes the address range, the bus terminator and the protocol

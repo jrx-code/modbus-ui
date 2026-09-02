@@ -351,3 +351,15 @@ select.wide{min-width:230px}
   background:#121922;padding:11px 12px}
 .planhead{font-size:12px;color:var(--mut);margin-bottom:9px}
 .planbox .adm-t{margin-bottom:10px}
+.adm-t.find td{padding-bottom:11px}
+.hw{display:flex;align-items:center;gap:7px;margin-top:6px;font-size:11.5px;
+  font-family:ui-monospace,Menlo,monospace}
+.hw .hwlab{color:var(--dim);font-family:ui-sans-serif,system-ui,sans-serif;font-size:11px}
+.hw .hwhave{background:#2a1a18;color:var(--bad);border-radius:4px;padding:1px 7px}
+.hw .hwwant{background:#132b19;color:var(--ok);border-radius:4px;padding:1px 7px}
+.hw .hwarr{color:var(--dim)}
+.fix{margin-top:6px;font-size:12px;color:var(--mut);line-height:1.65}
+.fix .fixlab{font-size:9.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--acc);
+  background:#152238;border-radius:4px;padding:1px 6px;margin-right:5px}
+.fix b{color:var(--fg);font-weight:600}
+button.tiny{margin-top:8px;font-size:11px;padding:3px 9px}

@@ -1047,6 +1047,65 @@ function moduleCard(m) {
 }
 
 
+// Znalezisko z sugestia. `applyFn` dostaje c.apply i wpisuje wartosc do kopii roboczej -
+// nic nie idzie na sprzet i nic nie jest zapisywane, dopoki ktos nie kliknie zapisu.
+function findingRow(c, applyFn) {
+  const tr = el('tr');
+  tr.appendChild(el('th', c.level === 'bad' ? 'lvbad' : 'lvwarn', c.who || (c.level === 'bad' ? 'błąd' : 'uwaga')));
+  const td = el('td', c.level === 'bad' ? 'badc' : 'warnc');
+  const p = el('div');
+  p.innerHTML = c.text;
+  td.appendChild(p);
+
+  if (c.have !== undefined && c.want !== undefined) {
+    const hw = el('div', 'hw');
+    hw.appendChild(el('span', 'hwlab', 'jest'));
+    hw.appendChild(el('span', 'hwhave', c.have));
+    hw.appendChild(el('span', 'hwarr', '→'));
+    hw.appendChild(el('span', 'hwlab', 'ma być'));
+    hw.appendChild(el('span', 'hwwant', c.want));
+    td.appendChild(hw);
+  }
+  if (c.fix) {
+    const f = el('div', 'fix');
+    f.innerHTML = '<span class="fixlab">jak ustawić</span> ' + c.fix;
+    td.appendChild(f);
+  }
+  if (c.apply && applyFn) {
+    const b = el('button', 'ghost tiny', 'Wpisz docelowe');
+    b.title = 'wpisuje wartość docelową do karty powyżej — na płytce nadal trzeba to przestawić ręcznie';
+    b.onclick = () => applyFn(c.apply);
+    td.appendChild(b);
+  }
+  tr.appendChild(td);
+  return tr;
+}
+
+function applyToIface(a) {
+  const st = MODIFACE;
+  if (a.bit) st[a.sw][a.bit - 1] = a.value;
+  else st[a.sw] = a.value;
+  MODPLAN = null;
+  MODIMSG = ['', 'wpisane w kartę interfejsu — sprawdź płytkę i zapisz'];
+  renderModules();
+}
+
+function applyToModule(a) {
+  const st = MODEDIT[a.n];
+  if (!st) return;
+  if (a.addr !== undefined) {
+    st.sw61[0] = a.addr >= 100;
+    st.sw64 = Math.floor(a.addr / 10) % 10;
+    st.sw63 = a.addr % 10;
+  } else if (a.bit) {
+    st[a.sw][a.bit - 1] = a.value;
+  } else {
+    st[a.sw] = a.value;
+  }
+  MODMSG[a.n] = ['', 'wpisane — sprawdź płytkę i zapisz'];
+  renderModules();
+}
+
 function ifaceCard() {
   const v = MODVIEW.iface, st = MODIFACE;
   const card = el('div', 'ifacecard');
@@ -1118,16 +1177,8 @@ function ifaceCard() {
   card.appendChild(body);
 
   if (v.checks.length) {
-    const t = el('table', 'adm-t');
-    v.checks.forEach(c => {
-      const tr = el('tr');
-      tr.appendChild(el('th', c.level === 'bad' ? 'lvbad' : 'lvwarn',
-        c.level === 'bad' ? 'błąd' : 'uwaga'));
-      const td = el('td', c.level === 'bad' ? 'badc' : 'warnc');
-      td.innerHTML = c.text;
-      tr.appendChild(td);
-      t.appendChild(tr);
-    });
+    const t = el('table', 'adm-t find');
+    v.checks.forEach(c => t.appendChild(findingRow(c, applyToIface)));
     const wrap = el('div', 'ifacechecks');
     wrap.appendChild(el('div', 'planhead', 'Zapisany stan interfejsu wobec instrukcji:'));
     wrap.appendChild(t);
@@ -1233,16 +1284,8 @@ function planBox() {
   box.appendChild(ul);
 
   if (MODPLAN.notes.length) {
-    const nt = el('table', 'adm-t');
-    MODPLAN.notes.forEach(n => {
-      const tr = el('tr');
-      tr.appendChild(el('th', n.level === 'bad' ? 'lvbad' : 'lvwarn',
-        n.level === 'bad' ? 'błąd' : 'uwaga'));
-      const td = el('td', n.level === 'bad' ? 'badc' : 'warnc');
-      td.innerHTML = n.text;
-      tr.appendChild(td);
-      nt.appendChild(tr);
-    });
+    const nt = el('table', 'adm-t find');
+    MODPLAN.notes.forEach(n => nt.appendChild(findingRow(n, applyToIface)));
     box.appendChild(nt);
   }
   box.appendChild(el('p', 'admnote',
@@ -1279,16 +1322,8 @@ function renderModules() {
   if (!bad.length) {
     s2.appendChild(el('p', 'admnote', 'Reguły z instrukcji nie zgłaszają nic do zapisanego stanu.'));
   } else {
-    const t = el('table', 'adm-t');
-    bad.forEach(c => {
-      const tr = el('tr');
-      const th = el('th', c.level === 'bad' ? 'lvbad' : 'lvwarn', c.who);
-      tr.appendChild(th);
-      const td = el('td', c.level === 'bad' ? 'badc' : 'warnc');
-      td.innerHTML = c.text;
-      tr.appendChild(td);
-      t.appendChild(tr);
-    });
+    const t = el('table', 'adm-t find');
+    bad.forEach(c => t.appendChild(findingRow(c, applyToModule)));
     s2.appendChild(t);
     s2.appendChild(el('p', 'admnote',
       'Lista dotyczy stanu zapisanego na serwerze, nie tego, co masz w tej chwili '

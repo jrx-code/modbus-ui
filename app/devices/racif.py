@@ -197,15 +197,45 @@ def address_of(state: dict) -> int:
     return (100 if state["sw61"][0] else 0) + state["sw64"] * 10 + state["sw63"]
 
 
+def _f(level, who, text, have=None, want=None, fix=None, apply=None):
+    """Jedno znalezisko. have/want/fix niosa sugestie, apply pozwala ja wpisac w panelu."""
+    d = {"level": level, "who": who, "text": text}
+    if have is not None:
+        d["have"] = have
+    if want is not None:
+        d["want"] = want
+    if fix is not None:
+        d["fix"] = fix
+    if apply is not None:
+        d["apply"] = apply
+    return d
+
+
+ONOFF = {True: "ON", False: "OFF"}
+
+# Powtarza sie przy kazdej zmianie na adapterze [SM str. 32 i 35].
+AFTER_ADAPTER = ("Po zmianie zrestartuj Modbus interface i wcisnij na nim "
+                 "<span class='mono'>SW7</span> [SM str. 32, 35].")
+
+
 def check(units: list[dict], states: dict) -> list[dict]:
-    """Bledy wynikajace z ustawien, liczone regulami z instrukcji. Zero modelu."""
+    """Bledy wynikajace z ustawien, liczone regulami z instrukcji. Zero modelu.
+
+    Kazde znalezisko niesie wartosc docelowa i sposob jej ustawienia - inaczej
+    komunikat mowi tylko, ze jest zle, i zostawia czlowieka z tym samym pytaniem.
+    """
     out = []
     seen: dict[int, list[str]] = {}
     terminators = []
+    lowest = min((u["n"] for u in units), default=0)
+    names = {u["n"]: (u.get("label") or f"Jednostka {u['n']}") for u in units}
+
+    def dial(n):
+        return f"<span class='mono'>SW64 = {(n // 10) % 10}</span>, <span class='mono'>SW63 = {n % 10}</span>"
 
     for u in units:
         n = u["n"]
-        name = u.get("label") or f"Jednostka {n}"
+        name = names[n]
         st = states[str(n)]
         addr = address_of(st)
 
@@ -213,65 +243,124 @@ def check(units: list[dict], states: dict) -> list[dict]:
         if st["sw21"][0]:
             terminators.append(name)
 
-        if addr == 0:
-            out.append({"level": "bad", "who": name,
-                        "text": "adres ustawiony na <span class='mono'>0</span>, a przy "
-                                "Central controller ID = <i>old controller</i> dopuszczalny "
-                                "zakres to <span class='mono'>1-64</span> [SM str. 33]. "
-                                "Jednostka nie zostanie zaadresowana."})
-        elif not ADDR_MIN <= addr <= ADDR_MAX:
-            out.append({"level": "bad", "who": name,
-                        "text": f"adres <span class='mono'>{addr}</span> poza zakresem "
-                                f"<span class='mono'>{ADDR_MIN}-{ADDR_MAX}</span> [SM str. 33]."})
-        elif addr != n:
-            out.append({"level": "warn", "who": name,
-                        "text": f"przelaczniki daja adres <span class='mono'>{addr}</span>, "
-                                f"a w <span class='mono'>config.json</span> jednostka ma numer "
-                                f"<span class='mono'>{n}</span>. Rejestry beda czytane z zlego miejsca."})
+        addr_fix = (f"Ustaw {dial(n)}" + (", <span class='mono'>SW61 Bit1 = OFF</span>"
+                    if n < 100 else ", <span class='mono'>SW61 Bit1 = ON</span>") + ". " + AFTER_ADAPTER)
+        addr_apply = {"n": n, "addr": n}
 
-        if st["sw61"][3]:
-            out.append({"level": "bad", "who": name,
-                        "text": "SW61 Bit4 = ON. Instrukcja: <i>If set “ON” can't communicate "
-                                "with Central Controller</i> [OM str. 3]."})
+        if addr == 0:
+            out.append(_f("bad", name,
+                          "adres ustawiony na <span class='mono'>0</span>, a przy "
+                          "Central controller ID = <i>old controller</i> dopuszczalny "
+                          "zakres to <span class='mono'>1-64</span> [SM str. 33]. "
+                          "Jednostka nie zostanie zaadresowana.",
+                          have="0", want=str(n), fix=addr_fix, apply=addr_apply))
+        elif not ADDR_MIN <= addr <= ADDR_MAX:
+            out.append(_f("bad", name,
+                          f"adres <span class='mono'>{addr}</span> poza zakresem "
+                          f"<span class='mono'>{ADDR_MIN}-{ADDR_MAX}</span> [SM str. 33].",
+                          have=str(addr), want=str(n), fix=addr_fix, apply=addr_apply))
+        elif addr != n:
+            out.append(_f("warn", name,
+                          f"przelaczniki daja adres <span class='mono'>{addr}</span>, "
+                          f"a w <span class='mono'>config.json</span> jednostka ma numer "
+                          f"<span class='mono'>{n}</span>. Rejestry beda czytane z zlego miejsca.",
+                          have=str(addr), want=str(n),
+                          fix=addr_fix + " Druga droga: zostaw plytke i popraw "
+                              f"<span class='mono'>n</span> na <span class='mono'>{addr}</span> "
+                              "w <span class='mono'>config.json</span> — ale wtedy zmien tez "
+                              "adresy pozostalych jednostek, zeby sie nie powtorzyly.",
+                          apply=addr_apply))
+
+        for sw, bit, want, txt, why in (
+            ("sw61", 4, False, "SW61 Bit4 = ON. Instrukcja: <i>If set “ON” can't communicate "
+                               "with Central Controller</i> [OM str. 3].",
+             "adapter przestaje gadac ze sterownikiem centralnym"),
+            ("sw62", 3, True, "SW62 Bit3 = OFF, czyli <i>No set Central Address</i> [OM str. 3]. "
+                              "Modbus interface nie zaadresuje tej jednostki.",
+             "bez tego jednostka nie ma adresu centralnego"),
+        ):
+            have = st[sw][bit - 1]
+            if have != want:
+                out.append(_f("bad", name, txt, have=ONOFF[have], want=ONOFF[want],
+                              fix=f"Przestaw <span class='mono'>{sw.upper()} Bit{bit}</span> na "
+                                  f"<span class='mono'>{ONOFF[want]}</span> ({why}). " + AFTER_ADAPTER,
+                              apply={"n": n, "sw": sw, "bit": bit, "value": want}))
+
         if not st["sw61"][1]:
-            out.append({"level": "warn", "who": name,
-                        "text": "SW61 Bit2 = OFF, czyli wybor protokolu automatyczny — Bit3 nie ma "
-                                "wtedy znaczenia i nie masz gwarancji TU2C-LINK."})
+            out.append(_f("warn", name,
+                          "SW61 Bit2 = OFF, czyli wybor protokolu automatyczny — Bit3 nie ma "
+                          "wtedy znaczenia i nie masz gwarancji TU2C-LINK.",
+                          have="OFF", want="ON",
+                          fix="Przestaw <span class='mono'>SW61 Bit2</span> na "
+                              "<span class='mono'>ON</span> (wybor reczny), a zaraz potem "
+                              "<span class='mono'>SW61 Bit3</span> na <span class='mono'>ON</span> "
+                              "(TU2C-LINK). " + AFTER_ADAPTER,
+                          apply={"n": n, "sw": "sw61", "bit": 2, "value": True}))
         elif not st["sw61"][2]:
-            out.append({"level": "warn", "who": name,
-                        "text": "SW61 Bit3 = OFF przy Bit2 = ON, czyli wymuszony TCC-LINK. "
-                                "Funkcje specjalne RAC (Hi-Power, ECO, Quiet, Silence) beda niedostepne "
-                                "[SM str. 35]."})
-        if not st["sw62"][2]:
-            out.append({"level": "bad", "who": name,
-                        "text": "SW62 Bit3 = OFF, czyli <i>No set Central Address</i> [OM str. 3]. "
-                                "Modbus interface nie zaadresuje tej jednostki."})
-        for i in (0, 1, 3):
-            if st["sw62"][i]:
-                out.append({"level": "warn", "who": name,
-                            "text": f"SW62 Bit{i + 1} = ON, a instrukcja opisuje ten stan jako "
-                                    "<span class='mono'>N/A</span> [OM str. 3]."})
+            out.append(_f("warn", name,
+                          "SW61 Bit3 = OFF przy Bit2 = ON, czyli wymuszony TCC-LINK. "
+                          "Funkcje specjalne RAC (Hi-Power, ECO, Quiet, Silence) beda niedostepne "
+                          "[SM str. 35].",
+                          have="OFF", want="ON",
+                          fix="Przestaw <span class='mono'>SW61 Bit3</span> na "
+                              "<span class='mono'>ON</span>. Kontrola: dioda "
+                              "<span class='mono'>PROTOCOL</span> ma swiecic ciagle, miganie to "
+                              "dalej TCC-LINK [OM str. 1]. " + AFTER_ADAPTER,
+                          apply={"n": n, "sw": "sw61", "bit": 3, "value": True}))
+
+        for i in (1, 2, 4):
+            if st["sw62"][i - 1]:
+                out.append(_f("warn", name,
+                              f"SW62 Bit{i} = ON, a instrukcja opisuje ten stan jako "
+                              "<span class='mono'>N/A</span> [OM str. 3].",
+                              have="ON", want="OFF",
+                              fix=f"Przestaw <span class='mono'>SW62 Bit{i}</span> na "
+                                  "<span class='mono'>OFF</span>. " + AFTER_ADAPTER,
+                              apply={"n": n, "sw": "sw62", "bit": i, "value": False}))
+
         if st["sw21"][1]:
-            out.append({"level": "warn", "who": name,
-                        "text": "SW21 Bit2 = ON daje rezystor z pozycji oznaczonej w instrukcji "
-                                "jako <i>Spare</i> ("
-                                + SW21_TERM[(st["sw21"][0], True)] + ")."})
+            out.append(_f("warn", name,
+                          "SW21 Bit2 = ON daje rezystor z pozycji oznaczonej w instrukcji "
+                          "jako <i>Spare</i> (" + SW21_TERM[(st["sw21"][0], True)] + ").",
+                          have="ON", want="OFF",
+                          fix="Przestaw <span class='mono'>SW21 Bit2</span> na "
+                              "<span class='mono'>OFF</span>. Jedyna uzywana pozycja to "
+                              "<span class='mono'>Bit1 = ON, Bit2 = OFF</span> = 100 Ω [OM str. 2].",
+                          apply={"n": n, "sw": "sw21", "bit": 2, "value": False}))
 
     for addr, who in seen.items():
         if len(who) > 1:
-            out.append({"level": "bad", "who": ", ".join(who),
-                        "text": f"ten sam adres <span class='mono'>{addr}</span> na kilku adapterach. "
-                                "SM str. 32: <i>Set the indoor unit central control address so that it "
-                                "does not match any other indoor unit addresses</i>."})
+            out.append(_f("bad", ", ".join(who),
+                          f"ten sam adres <span class='mono'>{addr}</span> na kilku adapterach. "
+                          "SM str. 32: <i>Set the indoor unit central control address so that it "
+                          "does not match any other indoor unit addresses</i>.",
+                          have=f"{addr} × {len(who)}",
+                          want=", ".join(str(u["n"]) for u in units),
+                          fix="Rozdziel adresy — najprosciej wpisz kazdemu adapterowi jego "
+                              "<span class='mono'>n</span> z <span class='mono'>config.json</span>: "
+                              + ", ".join(f"{names[u['n']]} → {u['n']}" for u in units)
+                              + ". " + AFTER_ADAPTER))
 
     if len(terminators) > 1:
-        out.append({"level": "bad", "who": ", ".join(terminators),
-                    "text": "wiecej niz jeden terminator na magistrali Uh. Instrukcja dopuszcza "
-                            "go tylko na adapterze przy jednostce o najnizszym adresie [OM str. 2]."})
+        out.append(_f("bad", ", ".join(terminators),
+                      "wiecej niz jeden terminator na magistrali Uh. Instrukcja dopuszcza "
+                      "go tylko na adapterze przy jednostce o najnizszym adresie [OM str. 2].",
+                      have=f"{len(terminators)} × ON", want="tylko " + names.get(lowest, "?"),
+                      fix=f"Zostaw <span class='mono'>SW21 Bit1 = ON</span> wylacznie na module "
+                          f"„{names.get(lowest, '?')}” (adres {lowest}), na pozostalych ustaw "
+                          "<span class='mono'>OFF</span>. " + AFTER_ADAPTER))
     elif not terminators:
-        out.append({"level": "warn", "who": "magistrala Uh",
-                    "text": "zaden adapter nie ma wlaczonego terminatora. Instrukcja wymaga go "
-                            "na adapterze o najnizszym adresie [OM str. 2]."})
+        out.append(_f("warn", "magistrala Uh",
+                      "zaden adapter nie ma wlaczonego terminatora. Instrukcja wymaga go "
+                      "na adapterze o najnizszym adresie [OM str. 2].",
+                      have="brak", want=names.get(lowest, "?"),
+                      fix=f"Ustaw <span class='mono'>SW21 Bit1 = ON</span> na module "
+                          f"„{names.get(lowest, '?')}” (adres {lowest}), "
+                          "<span class='mono'>Bit2</span> zostaw <span class='mono'>OFF</span> "
+                          "— to daje 100 Ω [OM str. 2]. Na interfejsie "
+                          "<span class='mono'>SW6</span> ma zostac <span class='mono'>open</span> "
+                          "[SM str. 29]. " + AFTER_ADAPTER,
+                      apply={"n": lowest, "sw": "sw21", "bit": 1, "value": True}))
     return out
 
 
@@ -417,58 +506,129 @@ def iface_baud(state: dict) -> int:
 
 
 def iface_check(state: dict, cfg_slave: int) -> list[dict]:
-    """Bledy w ustawieniu interfejsu. Reguly z instrukcji, nic zgadywanego."""
+    """Bledy w ustawieniu interfejsu, kazdy z wartoscia docelowa i sposobem ustawienia."""
     out = []
+    sw7 = ("Po zmianie <span class='mono'>SW1</span> albo <span class='mono'>SW3</span> wcisnij "
+           "<span class='mono'>SW7</span> — interfejs czyta te przelaczniki dopiero wtedy "
+           "[SM str. 28].")
+
     if state["sw1"] == 0:
-        out.append({"level": "bad", "text":
-                    "SW1 = <span class='mono'>0</span>. Instrukcja, ramka IMPORTANT: <i>if the SW1 value "
-                    "is that of the central controller ID or is 0, the Modbus interface will not operate "
-                    "properly</i> [SM str. 31]."})
+        out.append(_f("bad", "SW1",
+                      "SW1 = <span class='mono'>0</span>. Instrukcja, ramka IMPORTANT: <i>if the SW1 "
+                      "value is that of the central controller ID or is 0, the Modbus interface will "
+                      "not operate properly</i> [SM str. 31].",
+                      have="0", want=str(cfg_slave),
+                      fix=f"Ustaw <span class='mono'>SW1 = {cfg_slave}</span>, czyli tyle, ile ma "
+                          "<span class='mono'>slave</span> w <span class='mono'>config.json</span>. "
+                          + sw7,
+                      apply={"sw": "sw1", "value": cfg_slave}))
     elif state["sw1"] != cfg_slave:
-        out.append({"level": "bad", "text":
-                    f"SW1 = <span class='mono'>{state['sw1']}</span>, a w "
-                    f"<span class='mono'>config.json</span> panel odpytuje slave "
-                    f"<span class='mono'>{cfg_slave}</span>. Jedno z dwoch trzeba zmienic, inaczej "
-                    "aplikacja mowi w prozne."})
+        out.append(_f("bad", "SW1",
+                      f"SW1 = <span class='mono'>{state['sw1']}</span>, a w "
+                      f"<span class='mono'>config.json</span> panel odpytuje slave "
+                      f"<span class='mono'>{cfg_slave}</span>. Jedno z dwoch trzeba zmienic, inaczej "
+                      "aplikacja mowi w prozne.",
+                      have=str(state["sw1"]), want=str(cfg_slave),
+                      fix=f"Albo ustaw <span class='mono'>SW1 = {cfg_slave}</span> na plytce ({sw7}), "
+                          f"albo wpisz <span class='mono'>{state['sw1']}</span> w polu "
+                          "<i>Adres slave</i> w trybie administracyjnym — to zmienia tylko to, o co "
+                          "pyta panel, nie sprzet.",
+                      apply={"sw": "sw1", "value": cfg_slave}))
+
     if state["sw1"] and state["sw1"] not in IFACE_SLOTS:
-        out.append({"level": "warn", "text":
-                    f"SW1 = <span class='mono'>{state['sw1']}</span> nie jest zadnym z adresow "
-                    "przewidzianych dla kolejnych interfejsow (<span class='mono'>1, 4, 7, 10, 13</span>) "
-                    "[SM str. 28]. Przy jednym interfejsie to nie szkodzi, przy dwoch adresy sie nalozą."})
+        out.append(_f("warn", "SW1",
+                      f"SW1 = <span class='mono'>{state['sw1']}</span> nie jest zadnym z adresow "
+                      "przewidzianych dla kolejnych interfejsow (<span class='mono'>1, 4, 7, 10, 13</span>) "
+                      "[SM str. 28]. Przy jednym interfejsie to nie szkodzi, przy dwoch adresy sie nalozą.",
+                      have=str(state["sw1"]), want="1, 4, 7, 10 albo 13",
+                      fix="Jeden interfejs zajmuje trzy kolejne adresy, stad skok co 3. Przy jednym "
+                          "module najbezpieczniejsze jest <span class='mono'>SW1 = 1</span> — wtedy "
+                          "wypada tez terminator <span class='mono'>SW5 = 120 Ω</span>. " + sw7,
+                      apply={"sw": "sw1", "value": 1}))
 
     if state["ccid"] != "old":
-        out.append({"level": "bad", "text":
-                    "Central controller ID to <span class='mono'>" + CCID[state["ccid"]] + "</span>. "
-                    "NOTE do rozdz. 3-7: <i>When connecting with RAC interface, need to set the "
-                    "“Central controller ID setting” of the Modbus interface to “old controller”</i> "
-                    "[SM str. 16]. Bez tego adaptery RAC nie beda obslugiwane."})
+        out.append(_f("bad", "Central controller ID",
+                      "Central controller ID to <span class='mono'>" + CCID[state["ccid"]] + "</span>. "
+                      "NOTE do rozdz. 3-7: <i>When connecting with RAC interface, need to set the "
+                      "“Central controller ID setting” of the Modbus interface to “old controller”</i> "
+                      "[SM str. 16]. Bez tego adaptery RAC nie beda obslugiwane.",
+                      have=CCID[state["ccid"]], want="old controller",
+                      fix="Procedura [SM str. 30-31], po kolei: "
+                          "<b>1.</b> <span class='mono'>SW3 Bit1 → ON</span> (wejscie w tryb ID). "
+                          "<b>2.</b> Kontrola biezacej wartosci: <span class='mono'>SW1 → 0</span>, "
+                          "ID pokazuja diody <span class='mono'>LED2-LED5</span>. "
+                          "<b>3.</b> <span class='mono'>SW1 → F</span> — to jest kod "
+                          "<i>Old controller</i>, <span class='mono'>E</span> to fabryczne ID20. "
+                          "<b>4.</b> Wcisnij <span class='mono'>SW4</span>. "
+                          "<b>5.</b> <span class='mono'>SW3 Bit1 → OFF</span>. "
+                          f"<b>6.</b> <b>Przywroc <span class='mono'>SW1 = {cfg_slave}</span></b> — "
+                          "przy wlaczaniu zasilania SW1 musi trzymac adres slave, nie kod ID "
+                          "[SM str. 31]. <b>7.</b> Wcisnij <span class='mono'>SW7</span>. "
+                          "<b>Potem:</b> jednostki zgodne z TU2C-LINK moga przestac odpowiadac, "
+                          "az sie ich zrestartuje [SM str. 38, sekcja 9-7].",
+                      apply={"sw": "ccid", "value": "old"}))
 
     want5 = state["sw1"] == 1
     if state["sw5"] != want5:
-        out.append({"level": "warn" if not want5 else "bad", "text":
-                    f"SW5 stoi na <span class='mono'>{'120 Ω' if state['sw5'] else 'open'}</span>, "
-                    f"a przy SW1 = <span class='mono'>{state['sw1']}</span> ma byc "
-                    f"<span class='mono'>{'120 Ω' if want5 else 'open'}</span> — instrukcja: "
-                    "<i>Set “120 ohm” only when the Modbus interface address SW=1</i> [SM str. 29]."})
-    if state["sw6"]:
-        out.append({"level": "bad", "text":
-                    "SW6 stoi na <span class='mono'>100 Ω</span>. Instrukcja: <i>The Uh Line Termination "
-                    "resistance is set on the air conditioner side. Set SW6 to “open”</i> [SM str. 29]. "
-                    "Terminacje Uh robi adapter przez SW21 — tak masz dwa rezystory."})
-    if state["sw3"][0]:
-        out.append({"level": "bad", "text":
-                    "SW3 Bit1 = ON, czyli interfejs siedzi w trybie ustawiania Central controller ID, "
-                    "a nie w pracy normalnej [SM str. 28]."})
-    if state["sw2"]:
-        out.append({"level": "warn", "text":
-                    f"SW2 = <span class='mono'>{state['sw2']}</span>, a instrukcja mowi "
-                    "<i>Set these switches to zero (0)</i> w pracy normalnej [SM str. 28]."})
-    if any(state["sw8"]):
-        out.append({"level": "warn", "text":
-                    "SW8 ma bit w pozycji ON, a instrukcja: <i>Test switch (all OFF usually)</i> "
-                    "[SM str. 28]."})
-    return out
+        out.append(_f("bad" if want5 else "warn", "SW5",
+                      f"SW5 stoi na <span class='mono'>{'120 Ω' if state['sw5'] else 'open'}</span>, "
+                      f"a przy SW1 = <span class='mono'>{state['sw1']}</span> ma byc "
+                      f"<span class='mono'>{'120 Ω' if want5 else 'open'}</span> — instrukcja: "
+                      "<i>Set “120 ohm” only when the Modbus interface address SW=1</i> [SM str. 29].",
+                      have="120 Ω" if state["sw5"] else "open",
+                      want="120 Ω" if want5 else "open",
+                      fix=("Przestaw <span class='mono'>SW5</span> na <span class='mono'>120 Ω</span> "
+                           "— ten interfejs ma adres 1, wiec to on zamyka szyne RS-485."
+                           if want5 else
+                           "Przestaw <span class='mono'>SW5</span> na <span class='mono'>open</span>. "
+                           "Terminator RS-485 nalezy do interfejsu o adresie 1, a ten ma "
+                           f"<span class='mono'>{state['sw1']}</span>."),
+                      apply={"sw": "sw5", "value": want5}))
 
+    if state["sw6"]:
+        out.append(_f("bad", "SW6",
+                      "SW6 stoi na <span class='mono'>100 Ω</span>. Instrukcja: <i>The Uh Line "
+                      "Termination resistance is set on the air conditioner side. Set SW6 to "
+                      "“open”</i> [SM str. 29]. Terminacje Uh robi adapter przez SW21 — tak masz "
+                      "dwa rezystory.",
+                      have="100 Ω", want="open",
+                      fix="Przestaw <span class='mono'>SW6</span> na <span class='mono'>open</span> "
+                          "i upewnij sie, ze <span class='mono'>SW21 Bit1 = ON</span> jest dokladnie "
+                          "na jednym adapterze — tym o najnizszym adresie [OM str. 2].",
+                      apply={"sw": "sw6", "value": False}))
+
+    if state["sw3"][0]:
+        out.append(_f("bad", "SW3 Bit1",
+                      "SW3 Bit1 = ON, czyli interfejs siedzi w trybie ustawiania Central controller ID, "
+                      "a nie w pracy normalnej [SM str. 28].",
+                      have="ON", want="OFF",
+                      fix="Przestaw <span class='mono'>SW3 Bit1</span> na <span class='mono'>OFF</span>, "
+                          f"sprawdz, ze <span class='mono'>SW1 = {cfg_slave}</span>, i wcisnij "
+                          "<span class='mono'>SW7</span>. Jesli wchodziles w tryb ID, to jest jego "
+                          "ostatni krok [SM str. 31].",
+                      apply={"sw": "sw3", "bit": 1, "value": False}))
+
+    if state["sw2"]:
+        extra = ("" if state["sw2"] != 3 else
+                 " <span class='mono'>SW2 = 3</span> to kasowanie licznikow czasu pracy: po "
+                 "<span class='mono'>SW7</span> wroc na <span class='mono'>0</span> i wcisnij "
+                 "<span class='mono'>SW7</span> jeszcze raz [SM str. 28].")
+        out.append(_f("warn", "SW2",
+                      f"SW2 = <span class='mono'>{state['sw2']}</span>, a instrukcja mowi "
+                      "<i>Set these switches to zero (0)</i> w pracy normalnej [SM str. 28].",
+                      have=str(state["sw2"]), want="0",
+                      fix="Ustaw <span class='mono'>SW2 = 0</span>." + extra,
+                      apply={"sw": "sw2", "value": 0}))
+
+    if any(state["sw8"]):
+        out.append(_f("warn", "SW8",
+                      "SW8 ma bit w pozycji ON, a instrukcja: <i>Test switch (all OFF usually)</i> "
+                      "[SM str. 28].",
+                      have="/".join(ONOFF[b] for b in state["sw8"]), want="OFF/OFF",
+                      fix="Ustaw oba bity <span class='mono'>SW8</span> na "
+                          "<span class='mono'>OFF</span>.",
+                      apply={"sw": "sw8", "value": [False, False]}))
+    return out
 
 # --------------------------------------------------------------------------- wyliczanie adapterow z interfejsu
 
@@ -507,10 +667,18 @@ def derive(units: list[dict], iface_state: dict, cfg_slave: int) -> dict:
                    "w zakresie <span class='mono'>1-64</span> [SM str. 33], maksymalnie 64 jednostki "
                    "[SM str. 16].")
     else:
-        notes.append({"level": "bad", "text":
-                      "Interfejs nie jest ustawiony na <span class='mono'>old controller</span>, "
-                      "a przy adapterach RAC musi byc [SM str. 16]. Popraw interfejs — wyliczenie "
-                      "ponizej zaklada, ze to zrobisz."})
+        notes.append(_f("bad", "Central controller ID",
+                        "Interfejs nie jest ustawiony na <span class='mono'>old controller</span>, "
+                        "a przy adapterach RAC musi byc [SM str. 16]. Popraw interfejs — wyliczenie "
+                        "ponizej zaklada, ze to zrobisz.",
+                        have=CCID[iface["ccid"]], want="old controller",
+                        fix="Pelna procedura jest w karcie interfejsu wyzej, przy tym samym bledzie. "
+                            "W skrocie: <span class='mono'>SW3 Bit1 → ON</span>, "
+                            "<span class='mono'>SW1 → F</span>, <span class='mono'>SW4</span>, "
+                            "<span class='mono'>SW3 Bit1 → OFF</span>, "
+                            f"<span class='mono'>SW1 → {cfg_slave}</span>, "
+                            "<span class='mono'>SW7</span> [SM str. 30-31].",
+                        apply={"sw": "ccid", "value": "old"}))
     why.append(f"SW1 = <span class='mono'>{iface['sw1']}</span> ⇒ ten adres slave obsluguje jednostki "
                "o adresie centralnym <span class='mono'>1-64</span>, kolejny "
                f"(<span class='mono'>{iface['sw1'] + 1}</span>) jednostki 65-128 [SM str. 7].")
@@ -519,10 +687,13 @@ def derive(units: list[dict], iface_state: dict, cfg_slave: int) -> dict:
                    f"<span class='mono'>SW21 Bit1 = ON</span> na module „{names[lowest]}”, "
                    "bo ma najnizszy adres [OM str. 2, SM str. 29].")
     else:
-        notes.append({"level": "bad", "text":
-                      "SW6 na interfejsie stoi na <span class='mono'>100 Ω</span>. Wyliczenie i tak "
-                      "daje terminator na adapterze, wiec magistrala Uh mialaby dwa. Ustaw SW6 na "
-                      "<span class='mono'>open</span> [SM str. 29]."})
+        notes.append(_f("bad", "SW6",
+                        "SW6 na interfejsie stoi na <span class='mono'>100 Ω</span>. Wyliczenie i tak "
+                        "daje terminator na adapterze, wiec magistrala Uh mialaby dwa.",
+                        have="100 Ω", want="open",
+                        fix="Przestaw <span class='mono'>SW6</span> na <span class='mono'>open</span> "
+                            "— terminacje Uh robi strona klimatyzacji [SM str. 29].",
+                        apply={"sw": "sw6", "value": False}))
     why.append("Adaptery RAC pracuja w <b>TU2C-LINK</b> ⇒ <span class='mono'>SW61 Bit2 = ON</span> "
                "(wybor reczny) i <span class='mono'>SW61 Bit3 = ON</span>. W TCC-LINK interfejs nie "
                "udostepnia funkcji specjalnych RAC [SM str. 35].")
@@ -534,25 +705,39 @@ def derive(units: list[dict], iface_state: dict, cfg_slave: int) -> dict:
     # 2. adresy z config.json
     for n in order:
         if not ADDR_MIN <= n <= ADDR_MAX:
-            notes.append({"level": "bad", "text":
-                          f"{names[n]}: <span class='mono'>n = {n}</span> w config.json jest poza "
-                          f"zakresem <span class='mono'>{ADDR_MIN}-{ADDR_MAX}</span>, ktory narzuca "
-                          "Central controller ID = old controller [SM str. 33]."})
+            notes.append(_f("bad", names[n],
+                            f"<span class='mono'>n = {n}</span> w config.json jest poza zakresem "
+                            f"<span class='mono'>{ADDR_MIN}-{ADDR_MAX}</span>, ktory narzuca "
+                            "Central controller ID = old controller [SM str. 33].",
+                            have=str(n), want=f"{ADDR_MIN}-{ADDR_MAX}",
+                            fix="Zmien <span class='mono'>n</span> tej jednostki w "
+                                "<span class='mono'>config.json</span> na wartosc z zakresu i "
+                                "ustaw ten sam adres na adapterze pokretlami "
+                                "<span class='mono'>SW64</span> / <span class='mono'>SW63</span>."))
     if len(set(order)) != len(order):
-        notes.append({"level": "bad", "text":
-                      "config.json ma dwie jednostki o tym samym <span class='mono'>n</span>. "
-                      "SM str. 32: <i>Set the indoor unit central control address so that it does not "
-                      "match any other indoor unit addresses</i>."})
+        notes.append(_f("bad", "config.json",
+                        "sa dwie jednostki o tym samym <span class='mono'>n</span>. SM str. 32: "
+                        "<i>Set the indoor unit central control address so that it does not match "
+                        "any other indoor unit addresses</i>.",
+                        have=", ".join(str(x) for x in order), want="wartosci roznie",
+                        fix="Popraw <span class='mono'>units[].n</span> w "
+                            "<span class='mono'>config.json</span>, potem ustaw te same numery "
+                            "pokretlami na adapterach."))
     if len(order) > 64:
-        notes.append({"level": "bad", "text":
-                      "wiecej niz 64 jednostki na jednym interfejsie przy adapterach RAC "
-                      "[SM str. 16: <i>The maximum number of indoor units that can be connected "
-                      "is 64 IDUs</i>]."})
+        notes.append(_f("bad", "liczba jednostek",
+                        "wiecej niz 64 jednostki na jednym interfejsie przy adapterach RAC.",
+                        have=str(len(order)), want="≤ 64",
+                        fix="SM str. 16: <i>The maximum number of indoor units that can be connected "
+                            "is 64 IDUs</i>. Nadmiar wymaga drugiego interfejsu — kolejny dostaje "
+                            "<span class='mono'>SW1 = 4</span> [SM str. 28]."))
 
-    notes.append({"level": "warn", "text":
-                  "Po przelaczeniu interfejsu na <span class='mono'>old controller</span> jednostki "
-                  "zgodne z TU2C-LINK moga przestac odpowiadac do czasu ich restartu "
-                  "[SM str. 38, sekcja 9-7]."})
+    notes.append(_f("warn", "po zmianie",
+                    "Po przelaczeniu interfejsu na <span class='mono'>old controller</span> jednostki "
+                    "zgodne z TU2C-LINK moga przestac odpowiadac do czasu ich restartu "
+                    "[SM str. 38, sekcja 9-7].",
+                    fix="Jesli po procedurze jednostka milczy: odetnij jej zasilanie na chwile "
+                        "i podaj z powrotem, potem wcisnij <span class='mono'>SW7</span> na "
+                        "interfejsie [SM str. 32]."))
 
     plan = [{"n": n, "label": names[n], "addr": n,
              "sw64": (n // 10) % 10, "sw63": n % 10,

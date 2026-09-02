@@ -32,6 +32,13 @@ Site-specific deployment values live outside this repo (`/etc/modbus-ui/config.j
   Modbus protocol reads those back, so `/api/modules` stores what a person reported and
   computes the target from `units[].n` by rules. Never present the stored state as if it
   were measured.
+- **A finding without a fix is half a finding.** Every entry from `check()` and
+  `iface_check()` carries `have`, `want`, `fix` and — where a single value settles it —
+  `apply`, built by the `_f()` helper. A rule that can only say "this is wrong" leaves the
+  reader with the question they started with; add the target value and the key sequence.
+- **"Wpisz docelowe" records intent, not reality.** It writes the target into the working
+  copy so the card can be saved once the board really is changed. Never let it imply the
+  hardware moved, and never make it save on its own.
 - **The adapters derive from the interface module, not from each other.** The Modbus
   interface is what fixes the address range (`old controller` → 1-64, SM p. 33), the Uh
   terminator (its SW6 is `open`, so SW21 on an adapter closes the bus, SM p. 29) and the
