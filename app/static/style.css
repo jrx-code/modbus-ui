@@ -337,11 +337,16 @@ select.rot.wrongsel{border-color:var(--bad);color:var(--bad)}
 .derivebar{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap;
   background:#121922;border:1px solid var(--line);border-radius:8px;padding:9px 12px}
 .derivebar .dlab{font-size:12px;color:var(--mut)}
+.derivebar{margin-top:14px}
 .derivebar b{font-size:12.5px}
-.modcard.isref{border-color:var(--acc2)}
-.refpick{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--mut);cursor:pointer}
-.refpick input{margin:0}
-.modcard.isref .refpick{color:var(--acc)}
+.ifacecard{border:1px solid var(--acc2);border-radius:8px;background:#121922;
+  margin-top:12px;overflow:hidden}
+.ifacebody{padding:10px 12px;display:grid;gap:9px;
+  grid-template-columns:repeat(auto-fit,minmax(330px,1fr))}
+.ifacechecks{padding:0 12px 10px}
+.ifacecard .modbar{border-top:1px solid var(--line)}
+select.wide{min-width:230px}
+.whylist{margin:0 0 10px;padding-left:18px;font-size:12.5px;color:var(--mut);line-height:1.7}
 .planbox{margin-top:14px;border:1px solid var(--line);border-radius:8px;
   background:#121922;padding:11px 12px}
 .planhead{font-size:12px;color:var(--mut);margin-bottom:9px}

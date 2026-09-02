@@ -305,118 +305,258 @@ def build(units: list[dict], states: dict) -> dict:
     return {"modules": mods, "checks": check(units, states), "leds": LEDS, "after": AFTER,
             "addr_range": [ADDR_MIN, ADDR_MAX]}
 
-# --------------------------------------------------------------------------- wyliczanie z modulu glownego
+# --------------------------------------------------------------------------- interfejs Modbus (modul glowny)
 
-# Bity, ktore na calej magistrali musza byc takie same - przenosza sie z modulu
-# glownego bez zmiany. Reszta wynika z adresu i z tego, kto zamyka magistrale.
-INHERIT = (("sw61", (2, 3, 4)), ("sw62", (1, 2, 3, 4)), ("sw21", (2,)))
+# BMS-IFMB1280U-E to modul, do ktorego wpieta jest bramka RS-485. To on narzuca
+# adapterom zakres adresow i to, kto zamyka magistrale Uh - dlatego ustawienia
+# adapterow liczy sie od niego, a nie od jednego z nich.
+#
+# Zrodla: [SM] Service Manual A10-2103-7 rev. 7 - rozdz. 7 "Switches for setting"
+# (str. 28-29), tabela zakresow adresow (str. 6-7), procedura Central controller ID
+# (str. 30-31), NOTE do rozdz. 3-7 (str. 16), sekcja 9-7 (str. 38).
 
-# Bity, dla ktorych instrukcja podaje jedna dopuszczalna wartosc niezaleznie od adresu.
-# Sluzy tylko do ostrzezenia, kiedy modul glowny ma je inaczej - nie do poprawiania go.
-REQUIRED = {("sw61", 2): True, ("sw61", 3): True, ("sw61", 4): False,
-            ("sw62", 1): False, ("sw62", 2): False, ("sw62", 3): True, ("sw62", 4): False,
-            ("sw21", 2): False}
+# SW3 Bit3/Bit4 -> predkosc RS-485 [SM str. 28]. ON+ON daje to samo, co ON+OFF.
+BAUD_BY_BITS = {(False, False): 9600, (True, False): 19200,
+                (False, True): 38400, (True, True): 19200}
 
-BIT_WHY = {
-    ("sw61", 2): "wybor protokolu ma byc Manual, inaczej Bit3 nie ma znaczenia",
-    ("sw61", 3): "TU2C-LINK, inaczej tracisz funkcje specjalne RAC",
-    ("sw61", 4): "instrukcja: Set switch OFF, przy ON brak komunikacji ze sterownikiem centralnym",
-    ("sw62", 1): "instrukcja opisuje ON jako N/A",
-    ("sw62", 2): "instrukcja opisuje ON jako N/A",
-    ("sw62", 3): "bez tego adapter nie ustawia adresu centralnego",
-    ("sw62", 4): "instrukcja opisuje ON jako N/A",
-    ("sw21", 2): "pozycje z Bit2 = ON instrukcja oznacza jako Spare",
-}
+# Adresy slave dla kolejnych interfejsow na jednej szynie RS-485 [SM str. 7 i 28].
+# Skok wynosi 3, bo jeden interfejs zajmuje trzy adresy.
+IFACE_SLOTS = [1, 4, 7, 10, 13]
 
+CCID = {"old": "old controller (SW1 = F)", "id20": "central controller ID20 (fabryczne)"}
+
+
+def iface_board() -> list[dict]:
+    return [
+        {"id": "sw1", "kind": "hex", "name": "SW1", "src": "SM str. 28",
+         "title": "Modbus interface address — adres slave",
+         "note": "Zakres <span class='mono'>1-F</span>. Jeden interfejs zajmuje <b>trzy</b> adresy: "
+                 "<span class='mono'>N</span> obsluguje jednostki o adresie centralnym 1-64, "
+                 "<span class='mono'>N+1</span> jednostki 65-128, <span class='mono'>N+2</span> "
+                 "linie jednostek zewnetrznych 1-28. Przy kilku interfejsach na jednej szynie: "
+                 "<span class='mono'>1, 4, 7, 10, 13</span>. "
+                 "<b>Przy 0 interfejs nie dziala.</b> Po zmianie wcisnij <span class='mono'>SW7</span>."},
+        {"id": "sw2", "kind": "hex", "name": "SW2", "src": "SM str. 28",
+         "title": "Test switch",
+         "note": "W pracy normalnej <span class='mono'>0</span>. "
+                 "<span class='mono'>SW2 = 3</span> + <span class='mono'>SW7</span> zeruje liczniki "
+                 "czasu pracy, potem trzeba wrocic na 0 i znowu wcisnac SW7."},
+        {"id": "sw3", "kind": "dip", "name": "SW3", "src": "SM str. 28",
+         "title": "Test switch — tryb ID, LED5, predkosc",
+         "bits": [
+             {"i": 1, "target": False,
+              "desc": "tryb ustawiania Central controller ID. <span class='mono'>OFF</span> w pracy normalnej"},
+             {"i": 2, "target": False,
+              "desc": "zrodlo dla LED5: <span class='mono'>OFF</span> = RS-485, "
+                      "<span class='mono'>ON</span> = Uh line"},
+             {"i": 3, "target": None, "desc": "razem z Bit4 wybiera predkosc RS-485"},
+             {"i": 4, "target": None, "desc": "razem z Bit3 wybiera predkosc RS-485"},
+         ],
+         "table": [["Bit3", "Bit4", "Predkosc", "Uwagi"],
+                   ["OFF", "OFF", "9600 bps", "ustawienie fabryczne"],
+                   ["ON", "OFF", "19200 bps", ""],
+                   ["OFF", "ON", "38400 bps", "najszybsze, jakie interfejs przyjmuje"],
+                   ["ON", "ON", "19200 bps", "to samo co ON/OFF"]],
+         "note": "Predkosc musi sie zgadzac z bramka RS-485. Po zmianie wcisnij "
+                 "<span class='mono'>SW7</span>, dopiero potem przestaw bramke."},
+        {"id": "sw5", "kind": "two", "name": "SW5", "src": "SM str. 29",
+         "title": "Terminator RS-485",
+         "on": "120 Ω", "off": "open",
+         "note": "Instrukcja, ramka REQUIREMENT: <i>Set “120 ohm” only when the Modbus interface "
+                 "address SW=1, and set “open” for other Modbus interfaces</i>."},
+        {"id": "sw6", "kind": "two", "name": "SW6", "src": "SM str. 29",
+         "title": "Terminator magistrali Uh",
+         "on": "100 Ω", "off": "open",
+         "note": "Instrukcja, ta sama ramka: <i>The Uh Line Termination resistance is set on the "
+                 "air conditioner side. Set SW6 to “open”.</i> Terminacje Uh robi adapter przez SW21."},
+        {"id": "sw8", "kind": "dip", "name": "SW8", "src": "SM str. 28",
+         "title": "Test switch",
+         "bits": [{"i": 1, "target": False, "desc": "w pracy normalnej <span class='mono'>OFF</span>"},
+                  {"i": 2, "target": False, "desc": "w pracy normalnej <span class='mono'>OFF</span>"}],
+         "note": "Instrukcja: <i>Test switch (all OFF usually)</i>."},
+        {"id": "ccid", "kind": "choice", "name": "Central controller ID", "src": "SM str. 16, 30-31",
+         "title": "Tozsamosc interfejsu na magistrali Uh",
+         "options": [["old", CCID["old"]], ["id20", CCID["id20"]]],
+         "note": "NOTE do rozdzialu 3-7: <i>When connecting with RAC interface, need to set the "
+                 "“Central controller ID setting” of the Modbus interface to “old controller”.</i> "
+                 "Procedura: <span class='mono'>SW3 Bit1 → ON</span>, <span class='mono'>SW1 → F</span>, "
+                 "<span class='mono'>SW4</span>, <span class='mono'>SW3 Bit1 → OFF</span>, "
+                 "<b>SW1 z powrotem na adres slave</b>, <span class='mono'>SW7</span>."},
+    ]
+
+
+def iface_blank() -> dict:
+    """Stan fabryczny interfejsu: SW1 nieustawione, ID20, wszystko open [SM str. 28-30]."""
+    return {"sw1": 0, "sw2": 0, "sw3": [False] * 4, "sw5": False, "sw6": False,
+            "sw8": [False, False], "ccid": "id20"}
+
+
+def iface_normalize(raw) -> dict:
+    st = iface_blank()
+    if not isinstance(raw, dict):
+        return st
+    for k in ("sw1", "sw2"):
+        try:
+            v = int(raw.get(k, 0))
+        except (TypeError, ValueError):
+            v = 0
+        st[k] = v if 0 <= v <= 15 else 0
+    for k, width in (("sw3", 4), ("sw8", 2)):
+        v = raw.get(k)
+        if isinstance(v, list):
+            st[k] = [bool(v[i]) if i < len(v) else False for i in range(width)]
+    for k in ("sw5", "sw6"):
+        st[k] = bool(raw.get(k, False))
+    if raw.get("ccid") in CCID:
+        st["ccid"] = raw["ccid"]
+    return st
+
+
+def iface_baud(state: dict) -> int:
+    return BAUD_BY_BITS[(state["sw3"][2], state["sw3"][3])]
+
+
+def iface_check(state: dict, cfg_slave: int) -> list[dict]:
+    """Bledy w ustawieniu interfejsu. Reguly z instrukcji, nic zgadywanego."""
+    out = []
+    if state["sw1"] == 0:
+        out.append({"level": "bad", "text":
+                    "SW1 = <span class='mono'>0</span>. Instrukcja, ramka IMPORTANT: <i>if the SW1 value "
+                    "is that of the central controller ID or is 0, the Modbus interface will not operate "
+                    "properly</i> [SM str. 31]."})
+    elif state["sw1"] != cfg_slave:
+        out.append({"level": "bad", "text":
+                    f"SW1 = <span class='mono'>{state['sw1']}</span>, a w "
+                    f"<span class='mono'>config.json</span> panel odpytuje slave "
+                    f"<span class='mono'>{cfg_slave}</span>. Jedno z dwoch trzeba zmienic, inaczej "
+                    "aplikacja mowi w prozne."})
+    if state["sw1"] and state["sw1"] not in IFACE_SLOTS:
+        out.append({"level": "warn", "text":
+                    f"SW1 = <span class='mono'>{state['sw1']}</span> nie jest zadnym z adresow "
+                    "przewidzianych dla kolejnych interfejsow (<span class='mono'>1, 4, 7, 10, 13</span>) "
+                    "[SM str. 28]. Przy jednym interfejsie to nie szkodzi, przy dwoch adresy sie nalozą."})
+
+    if state["ccid"] != "old":
+        out.append({"level": "bad", "text":
+                    "Central controller ID to <span class='mono'>" + CCID[state["ccid"]] + "</span>. "
+                    "NOTE do rozdz. 3-7: <i>When connecting with RAC interface, need to set the "
+                    "“Central controller ID setting” of the Modbus interface to “old controller”</i> "
+                    "[SM str. 16]. Bez tego adaptery RAC nie beda obslugiwane."})
+
+    want5 = state["sw1"] == 1
+    if state["sw5"] != want5:
+        out.append({"level": "warn" if not want5 else "bad", "text":
+                    f"SW5 stoi na <span class='mono'>{'120 Ω' if state['sw5'] else 'open'}</span>, "
+                    f"a przy SW1 = <span class='mono'>{state['sw1']}</span> ma byc "
+                    f"<span class='mono'>{'120 Ω' if want5 else 'open'}</span> — instrukcja: "
+                    "<i>Set “120 ohm” only when the Modbus interface address SW=1</i> [SM str. 29]."})
+    if state["sw6"]:
+        out.append({"level": "bad", "text":
+                    "SW6 stoi na <span class='mono'>100 Ω</span>. Instrukcja: <i>The Uh Line Termination "
+                    "resistance is set on the air conditioner side. Set SW6 to “open”</i> [SM str. 29]. "
+                    "Terminacje Uh robi adapter przez SW21 — tak masz dwa rezystory."})
+    if state["sw3"][0]:
+        out.append({"level": "bad", "text":
+                    "SW3 Bit1 = ON, czyli interfejs siedzi w trybie ustawiania Central controller ID, "
+                    "a nie w pracy normalnej [SM str. 28]."})
+    if state["sw2"]:
+        out.append({"level": "warn", "text":
+                    f"SW2 = <span class='mono'>{state['sw2']}</span>, a instrukcja mowi "
+                    "<i>Set these switches to zero (0)</i> w pracy normalnej [SM str. 28]."})
+    if any(state["sw8"]):
+        out.append({"level": "warn", "text":
+                    "SW8 ma bit w pozycji ON, a instrukcja: <i>Test switch (all OFF usually)</i> "
+                    "[SM str. 28]."})
+    return out
+
+
+# --------------------------------------------------------------------------- wyliczanie adapterow z interfejsu
 
 def _apply_addr(state: dict, addr: int) -> None:
+    """Rozklada adres centralny na przelaczniki adaptera [OM str. 3]."""
     state["sw61"][0] = addr >= 100
     state["sw64"] = (addr // 10) % 10
     state["sw63"] = addr % 10
 
 
-def derive(units: list[dict], ref_n: int, ref_state: dict, addressing: str) -> dict:
-    """Rozpisuje ustawienia pozostalych adapterow na podstawie modulu glownego.
+def derive(units: list[dict], iface_state: dict, cfg_slave: int) -> dict:
+    """Rozpisuje ustawienia adapterow RAC I/F na podstawie interfejsu Modbus.
 
-    addressing = "sequential": adresy ida kolejno od tego, co ustawiono na glownym,
-                 w kolejnosci z config.json.
-    addressing = "config":     adresy bierze sie z pola n w config.json, a z glownego
-                 przenosza sie wylacznie bity wspolne dla magistrali.
+    Interfejs nie ustawia adresow jednostek - te biora sie z pola n w config.json.
+    Narzuca natomiast zakres adresow, terminacje Uh i to, ze adaptery musza pracowac
+    w TU2C-LINK, zeby dzialaly funkcje specjalne RAC.
     """
-    if addressing not in ("sequential", "config"):
-        raise ValueError("addressing musi byc 'sequential' albo 'config'")
+    iface = iface_normalize(iface_state)
     order = [u["n"] for u in units]
-    if ref_n not in order:
-        raise ValueError(f"jednostka {ref_n} nie nalezy do tego urzadzenia")
+    names = {u["n"]: (u.get("label") or f"Jednostka {u['n']}") for u in units}
+    lowest = min(order, default=0)
 
-    ref = normalize(ref_state)
-    base = address_of(ref)
-    ri = order.index(ref_n)
-
-    addrs = {}
-    for i, n in enumerate(order):
-        addrs[n] = base + (i - ri) if addressing == "sequential" else n
-    if addressing == "config":
-        addrs[ref_n] = base          # glownego nie ruszamy, pokazujemy go jak jest
-
-    lowest = min(addrs.values())
-    states, notes = {}, []
+    states, notes, why = {}, [], []
 
     for n in order:
-        if n == ref_n:
-            states[str(n)] = ref
-            continue
         st = blank_state()
-        for sw, bits in INHERIT:
-            for b in bits:
-                st[sw][b - 1] = ref[sw][b - 1]
-        _apply_addr(st, max(addrs[n], 0))
-        st["sw21"][0] = addrs[n] == lowest
+        st["sw61"] = [n >= 100, True, True, False]
+        st["sw62"] = [False, False, True, False]
+        _apply_addr(st, n)
+        st["sw21"] = [n == lowest, False]
         states[str(n)] = st
 
-    names = {u["n"]: (u.get("label") or f"Jednostka {u['n']}") for u in units}
+    # 1. co narzucil interfejs
+    if iface["ccid"] == "old":
+        why.append("Central controller ID = <b>old controller</b> ⇒ adresy centralne jednostek "
+                   "w zakresie <span class='mono'>1-64</span> [SM str. 33], maksymalnie 64 jednostki "
+                   "[SM str. 16].")
+    else:
+        notes.append({"level": "bad", "text":
+                      "Interfejs nie jest ustawiony na <span class='mono'>old controller</span>, "
+                      "a przy adapterach RAC musi byc [SM str. 16]. Popraw interfejs — wyliczenie "
+                      "ponizej zaklada, ze to zrobisz."})
+    why.append(f"SW1 = <span class='mono'>{iface['sw1']}</span> ⇒ ten adres slave obsluguje jednostki "
+               "o adresie centralnym <span class='mono'>1-64</span>, kolejny "
+               f"(<span class='mono'>{iface['sw1'] + 1}</span>) jednostki 65-128 [SM str. 7].")
+    if not iface["sw6"]:
+        why.append(f"SW6 = <b>open</b> na interfejsie ⇒ magistrale Uh zamyka adapter: "
+                   f"<span class='mono'>SW21 Bit1 = ON</span> na module „{names[lowest]}”, "
+                   "bo ma najnizszy adres [OM str. 2, SM str. 29].")
+    else:
+        notes.append({"level": "bad", "text":
+                      "SW6 na interfejsie stoi na <span class='mono'>100 Ω</span>. Wyliczenie i tak "
+                      "daje terminator na adapterze, wiec magistrala Uh mialaby dwa. Ustaw SW6 na "
+                      "<span class='mono'>open</span> [SM str. 29]."})
+    why.append("Adaptery RAC pracuja w <b>TU2C-LINK</b> ⇒ <span class='mono'>SW61 Bit2 = ON</span> "
+               "(wybor reczny) i <span class='mono'>SW61 Bit3 = ON</span>. W TCC-LINK interfejs nie "
+               "udostepnia funkcji specjalnych RAC [SM str. 35].")
+    why.append("<span class='mono'>SW62 Bit3 = ON</span> na kazdym adapterze, inaczej adapter nie "
+               "ustawia adresu centralnego i interfejs nie ma czego odpytac [OM str. 3].")
+    why.append(f"Predkosc RS-485 <span class='mono'>{iface_baud(iface)} bps</span> dotyczy wylacznie "
+               "lacza interfejs–bramka. Adapterow nie ustawia sie na predkosc.")
 
-    # 1. blad przeniesiony z modulu glownego zostaje bledem na wszystkich
-    for (sw, b), want in REQUIRED.items():
-        if ref[sw][b - 1] != want:
-            notes.append({"level": "bad",
-                          "text": f"{sw.upper()} Bit{b} na module glownym stoi na "
-                                  f"<span class='mono'>{'ON' if ref[sw][b - 1] else 'OFF'}</span>, "
-                                  f"a instrukcja wymaga <span class='mono'>{'ON' if want else 'OFF'}</span> "
-                                  f"({BIT_WHY[(sw, b)]}). Wyliczenie przenioslo to na wszystkie adaptery — "
-                                  "popraw modul glowny i policz jeszcze raz."})
-
-    # 2. adresy
+    # 2. adresy z config.json
     for n in order:
-        a = addrs[n]
-        if not ADDR_MIN <= a <= ADDR_MAX:
-            notes.append({"level": "bad",
-                          "text": f"{names[n]}: wyliczony adres <span class='mono'>{a}</span> "
-                                  f"jest poza zakresem <span class='mono'>{ADDR_MIN}-{ADDR_MAX}</span> "
-                                  "[SM str. 33]."})
-        elif a != n:
-            notes.append({"level": "warn",
-                          "text": f"{names[n]}: adres <span class='mono'>{a}</span>, a w "
-                                  f"<span class='mono'>config.json</span> ta jednostka ma "
-                                  f"<span class='mono'>n = {n}</span>. Mapa rejestrow liczy sie z "
-                                  "<span class='mono'>n</span>, wiec albo zmien adres na plytce, albo "
-                                  "popraw <span class='mono'>config.json</span> — inaczej panel bedzie "
-                                  "czytal cudza jednostke."})
+        if not ADDR_MIN <= n <= ADDR_MAX:
+            notes.append({"level": "bad", "text":
+                          f"{names[n]}: <span class='mono'>n = {n}</span> w config.json jest poza "
+                          f"zakresem <span class='mono'>{ADDR_MIN}-{ADDR_MAX}</span>, ktory narzuca "
+                          "Central controller ID = old controller [SM str. 33]."})
+    if len(set(order)) != len(order):
+        notes.append({"level": "bad", "text":
+                      "config.json ma dwie jednostki o tym samym <span class='mono'>n</span>. "
+                      "SM str. 32: <i>Set the indoor unit central control address so that it does not "
+                      "match any other indoor unit addresses</i>."})
+    if len(order) > 64:
+        notes.append({"level": "bad", "text":
+                      "wiecej niz 64 jednostki na jednym interfejsie przy adapterach RAC "
+                      "[SM str. 16: <i>The maximum number of indoor units that can be connected "
+                      "is 64 IDUs</i>]."})
 
-    # 3. terminator
-    term = [names[n] for n in order if addrs[n] == lowest]
-    if ref_n not in order or addrs[ref_n] != lowest:
-        notes.append({"level": "warn",
-                      "text": "terminator magistrali Uh wypadl na " + ", ".join(term)
-                              + f", bo tam jest najnizszy adres (<span class='mono'>{lowest}</span>), "
-                                "a nie na module glownym [OM str. 2]."})
-    if len(term) > 1:
-        notes.append({"level": "bad",
-                      "text": "kilka adapterow ma ten sam najnizszy adres, wiec terminator wypadl na "
-                              "wiecej niz jeden: " + ", ".join(term) + "."})
+    notes.append({"level": "warn", "text":
+                  "Po przelaczeniu interfejsu na <span class='mono'>old controller</span> jednostki "
+                  "zgodne z TU2C-LINK moga przestac odpowiadac do czasu ich restartu "
+                  "[SM str. 38, sekcja 9-7]."})
 
-    plan = [{"n": n, "label": names[n], "addr": addrs[n],
-             "sw64": (max(addrs[n], 0) // 10) % 10, "sw63": max(addrs[n], 0) % 10,
-             "terminator": addrs[n] == lowest, "ref": n == ref_n} for n in order]
-    return {"states": states, "notes": notes, "plan": plan, "ref": ref_n,
-            "addressing": addressing}
+    plan = [{"n": n, "label": names[n], "addr": n,
+             "sw64": (n // 10) % 10, "sw63": n % 10,
+             "terminator": n == lowest} for n in order]
+    return {"states": states, "notes": notes, "why": why, "plan": plan,
+            "iface": iface, "baud": iface_baud(iface), "slave": iface["sw1"],
+            "cfg_slave": cfg_slave}

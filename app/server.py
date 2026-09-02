@@ -8,7 +8,8 @@ Stdlib only. Serwuje statyczny frontend i JSON API:
     GET  /api/diag?device=ID       liczniki diagnostyczne interfejsu
     GET  /api/modules?device=ID    przelaczniki adapterow RAC I/F: cel, stan, roznice
     POST /api/modules              zapis stanu przelacznikow jednego adaptera
-    POST /api/modules/derive       rozpisanie pozostalych adapterow z modulu glownego
+    POST /api/interface            zapis stanu przelacznikow interfejsu Modbus
+    POST /api/modules/derive       rozpisanie adapterow na podstawie interfejsu
     GET  /api/audit                ostatnie zapisy
 """
 
@@ -697,10 +698,36 @@ def module_states(dev: dict) -> dict:
     return out
 
 
+def iface_state(dev: dict) -> dict:
+    stored = (load_modules().get(dev["id"]) or {}).get("iface")
+    st = racif.iface_normalize(stored)
+    if isinstance(stored, dict) and stored.get("saved_at"):
+        st["saved_at"] = stored["saved_at"]
+    return st
+
+
 def modules_view(dev: dict) -> dict:
     view = racif.build(dev["units"], module_states(dev))
+    ifc = iface_state(dev)
+    view["iface"] = {"state": ifc, "board": racif.iface_board(),
+                     "checks": racif.iface_check(ifc, dev["slave"]),
+                     "baud": racif.iface_baud(ifc), "cfg_slave": dev["slave"]}
     view["device"] = dev["id"]
     return view
+
+
+def save_iface(dev: dict, state) -> dict:
+    clean = racif.iface_normalize(state)
+    clean["saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    data = load_modules()
+    data.setdefault(dev["id"], {})["iface"] = clean
+    save_modules(data)
+    desc = (f"SW1={clean['sw1']} SW2={clean['sw2']} SW3 {_bits(clean['sw3'])} "
+            f"SW5={'120' if clean['sw5'] else 'open'} SW6={'100' if clean['sw6'] else 'open'} "
+            f"ID={clean['ccid']}")
+    log(f"INTERFEJS {dev['id']}: {desc}")
+    TXLOG.note(dev["id"], "zapis stanu przelacznikow interfejsu Modbus: " + desc, "info")
+    return modules_view(dev)
 
 
 def save_module(dev: dict, n, state) -> dict:
@@ -725,14 +752,10 @@ def save_module(dev: dict, n, state) -> dict:
     return modules_view(dev)
 
 
-def derive_modules(dev: dict, ref_n, ref_state, addressing: str) -> dict:
-    """Wylicza ustawienia pozostalych adapterow. Niczego nie zapisuje."""
-    try:
-        ref_n = int(ref_n)
-    except (TypeError, ValueError):
-        raise ValueError("numer modulu glownego musi byc liczba")
-    out = racif.derive(dev["units"], ref_n, ref_state, str(addressing or "sequential"))
-    log(f"WYLICZENIE {dev['id']}: glowny={ref_n} adresowanie={out['addressing']} "
+def derive_modules(dev: dict, ifc) -> dict:
+    """Wylicza ustawienia adapterow z interfejsu Modbus. Niczego nie zapisuje."""
+    out = racif.derive(dev["units"], ifc if ifc is not None else iface_state(dev), dev["slave"])
+    log(f"WYLICZENIE {dev['id']}: SW1={out['slave']} baud={out['baud']} "
         + ", ".join(f"{p['n']}→{p['addr']}" for p in out["plan"]))
     return out
 
@@ -872,9 +895,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, apply_config(body["device"], body.get("changes") or {}))
             elif u.path == "/api/modules":
                 self._json(200, save_module(dev, body.get("n"), body.get("state")))
+            elif u.path == "/api/interface":
+                self._json(200, save_iface(dev, body.get("state")))
             elif u.path == "/api/modules/derive":
-                self._json(200, derive_modules(dev, body.get("ref"), body.get("state"),
-                                               body.get("addressing")))
+                self._json(200, derive_modules(dev, body.get("iface")))
             elif u.path == "/api/config/reset":
                 self._json(200, reset_config(body["device"]))
             elif u.path == "/api/write":

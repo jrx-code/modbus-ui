@@ -32,14 +32,17 @@ Site-specific deployment values live outside this repo (`/etc/modbus-ui/config.j
   Modbus protocol reads those back, so `/api/modules` stores what a person reported and
   computes the target from `units[].n` by rules. Never present the stored state as if it
   were measured.
-- **Deriving boards copies faults too.** `racif.derive()` propagates the bus-wide bits from
-  the reference board verbatim, on purpose — the point is to mirror what is physically set.
-  `REQUIRED` exists so a non-compliant reference is reported in `notes` instead of being
-  quietly corrected. Never "fix" the reference inside `derive()`.
-- **Sequential addressing can go negative.** The reference may sit anywhere in the config
-  order, so a low reference address pushes earlier units below zero. `_apply_addr` clamps
-  the rotary to 0 because a physical selector cannot show -1, while `plan` and `notes` carry
-  the true value. Keep the two apart.
+- **The adapters derive from the interface module, not from each other.** The Modbus
+  interface is what fixes the address range (`old controller` → 1-64, SM p. 33), the Uh
+  terminator (its SW6 is `open`, so SW21 on an adapter closes the bus, SM p. 29) and the
+  protocol. `racif.derive()` takes the interface state, never a peer board.
+- **`old controller` is mandatory with RAC, and it is not obvious.** SM p. 16, NOTE to
+  section 3-7: *When connecting with RAC interface, need to set the "Central controller ID
+  setting" of the Modbus interface to "old controller"*. It also caps the installation at
+  64 indoor units. Factory value is ID20, which silently does not work with RAC.
+- **Indoor addresses do not come from SW1.** Slave `N` always covers central addresses
+  1-64, `N+1` covers 65-128, `N+2` outdoor lines (SM p. 7). Changing SW1 does not shift the
+  indoor numbering, so the addresses stay in `units[].n`.
 - **The terminator belongs to the lowest indoor address, not to unit 1.** `board()` takes
   the flag from `min(units[].n)`. Hardcoding unit 1 breaks the moment the addressing plan
   changes.

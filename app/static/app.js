@@ -894,9 +894,9 @@ function adminToggle() {
 let MODVIEW = null;   // odpowiedz /api/modules
 let MODEDIT = {};     // robocza kopia stanu, n -> {sw21,sw61,sw62,sw63,sw64}
 let MODMSG = {};      // n -> [klasa, tekst]
-let MODREF = null;    // numer modulu glownego
 let MODPLAN = null;   // wynik ostatniego wyliczenia, do pokazania obok
-let MODADDR = 'sequential';
+let MODIFACE = null;  // robocza kopia stanu interfejsu Modbus
+let MODIMSG = null;
 
 const clone = o => JSON.parse(JSON.stringify(o));
 
@@ -904,8 +904,7 @@ async function modLoad() {
   MODVIEW = await api('/api/modules?device=' + encodeURIComponent(DEV.id));
   MODEDIT = {};
   MODVIEW.modules.forEach(m => { MODEDIT[m.n] = clone(m.state); });
-  if (MODREF === null || !MODVIEW.modules.some(m => m.n === MODREF))
-    MODREF = MODVIEW.modules.reduce((a, m) => Math.min(a, m.n), Infinity);
+  MODIFACE = clone(MODVIEW.iface.state);
   renderModules();
 }
 
@@ -978,7 +977,7 @@ function rotaryRow(m, sw) {
 }
 
 function moduleCard(m) {
-  const card = el('div', 'modcard' + (MODREF === m.n ? ' isref' : ''));
+  const card = el('div', 'modcard');
 
   const h = el('header', 'modhead');
   h.appendChild(el('strong', '', m.label));
@@ -987,13 +986,6 @@ function moduleCard(m) {
   h.appendChild(el('span', 'badge ' + (abad ? 'bad' : 'ok'), 'adres ' + addr));
   if (m.terminator) h.appendChild(el('span', 'badge term', 'terminator Uh'));
   h.appendChild(el('span', 'grow'));
-  const rl = el('label', 'refpick');
-  const r = el('input');
-  r.type = 'radio'; r.name = 'modref'; r.checked = MODREF === m.n;
-  r.onchange = () => { MODREF = m.n; MODPLAN = null; renderModules(); };
-  rl.append(r, el('span', '', 'główny'));
-  rl.title = 'moduł, z którego liczone są ustawienia pozostałych';
-  h.appendChild(rl);
   if (m.state.saved_at) h.appendChild(el('span', 'sub', 'zapisano ' + m.state.saved_at));
   card.appendChild(h);
 
@@ -1055,41 +1047,144 @@ function moduleCard(m) {
 }
 
 
-function deriveBar() {
-  const bar = el('div', 'derivebar');
-  bar.appendChild(el('span', 'dlab', 'Moduł główny:'));
-  const who = MODVIEW.modules.find(m => m.n === MODREF);
-  bar.appendChild(el('b', '', who ? who.label : '—'));
+function ifaceCard() {
+  const v = MODVIEW.iface, st = MODIFACE;
+  const card = el('div', 'ifacecard');
 
-  bar.appendChild(el('span', 'dlab', 'Adresy pozostałych:'));
-  const sel = el('select');
-  sel.add(new Option('kolejno od głównego', 'sequential'));
-  sel.add(new Option('z config.json (pole n)', 'config'));
-  sel.value = MODADDR;
-  sel.onchange = () => { MODADDR = sel.value; };
-  bar.appendChild(sel);
+  const h = el('header', 'modhead');
+  h.appendChild(el('strong', '', 'Interfejs Modbus BMS-IFMB1280U-E'));
+  h.appendChild(el('span', 'badge ok', 'slave ' + st.sw1));
+  h.appendChild(el('span', 'badge term', BAUDNAME(st) + ' bps'));
+  h.appendChild(el('span', 'grow'));
+  h.appendChild(el('span', 'sub', 'tu wpięta jest bramka RS-485'));
+  if (v.state.saved_at) h.appendChild(el('span', 'sub', '· zapisano ' + v.state.saved_at));
+  card.appendChild(h);
 
-  const btn = el('button', 'primary small', 'Wylicz ustawienia pozostałych');
+  const body = el('div', 'ifacebody');
+  v.board.forEach(sw => {
+    const row = el('div', 'dipsw');
+    const nm = el('div', 'dipname');
+    nm.appendChild(el('b', '', sw.name));
+    nm.appendChild(el('span', 'sub', sw.title.split('—').pop().trim()));
+    row.appendChild(nm);
+
+    if (sw.kind === 'hex') {
+      const box = el('div', 'rotbox');
+      const sel = el('select', 'rot');
+      for (let i = 0; i <= 15; i++) sel.add(new Option(i.toString(16).toUpperCase(), String(i)));
+      sel.value = String(st[sw.id]);
+      sel.onchange = () => { st[sw.id] = +sel.value; MODPLAN = null; renderModules(); };
+      box.appendChild(sel);
+      if (sw.id === 'sw1')
+        box.appendChild(el('span', 'dipval' + (st.sw1 === v.cfg_slave ? '' : ' wrongtxt'),
+          'config.json: ' + v.cfg_slave));
+      row.appendChild(box);
+    } else if (sw.kind === 'dip') {
+      const bank = el('div', 'dipbank');
+      sw.bits.forEach(b => {
+        const cell = el('div', 'dipcell');
+        const btn = el('button', 'dip');
+        const on = !!st[sw.id][b.i - 1];
+        btn.classList.add(on ? 'on' : 'off');
+        if (b.target !== null && b.target !== undefined && on !== b.target) btn.classList.add('wrong');
+        btn.title = 'Bit' + b.i + (b.target === null || b.target === undefined
+          ? ' — wartość zależy od wybranej prędkości' : ' — docelowo ' + (b.target ? 'ON' : 'OFF'));
+        btn.innerHTML = '<span class="lever"></span>';
+        btn.onclick = () => { st[sw.id][b.i - 1] = !on; MODPLAN = null; renderModules(); };
+        cell.append(btn, el('span', 'dipno', String(b.i)), el('span', 'dipval', on ? 'ON' : 'OFF'));
+        bank.appendChild(cell);
+      });
+      row.appendChild(bank);
+    } else if (sw.kind === 'two') {
+      const box = el('div', 'rotbox');
+      const sel = el('select');
+      sel.add(new Option(sw.off, 'off'));
+      sel.add(new Option(sw.on, 'on'));
+      sel.value = st[sw.id] ? 'on' : 'off';
+      sel.onchange = () => { st[sw.id] = sel.value === 'on'; MODPLAN = null; renderModules(); };
+      box.appendChild(sel);
+      row.appendChild(box);
+    } else if (sw.kind === 'choice') {
+      const box = el('div', 'rotbox');
+      const sel = el('select', 'wide');
+      sw.options.forEach(o => sel.add(new Option(o[1], o[0])));
+      sel.value = st.ccid;
+      sel.onchange = () => { st.ccid = sel.value; MODPLAN = null; renderModules(); };
+      box.appendChild(sel);
+      row.appendChild(box);
+    }
+    body.appendChild(row);
+  });
+  card.appendChild(body);
+
+  if (v.checks.length) {
+    const t = el('table', 'adm-t');
+    v.checks.forEach(c => {
+      const tr = el('tr');
+      tr.appendChild(el('th', c.level === 'bad' ? 'lvbad' : 'lvwarn',
+        c.level === 'bad' ? 'błąd' : 'uwaga'));
+      const td = el('td', c.level === 'bad' ? 'badc' : 'warnc');
+      td.innerHTML = c.text;
+      tr.appendChild(td);
+      t.appendChild(tr);
+    });
+    const wrap = el('div', 'ifacechecks');
+    wrap.appendChild(el('div', 'planhead', 'Zapisany stan interfejsu wobec instrukcji:'));
+    wrap.appendChild(t);
+    card.appendChild(wrap);
+  }
+
+  const bar = el('div', 'modbar');
+  const save = el('button', 'primary small', 'Zapisz stan interfejsu');
+  const calc = el('button', 'ghost small', 'Wylicz ustawienia adapterów');
+  const back = el('button', 'ghost small', 'Cofnij zmiany');
   const msg = el('span', 'admmsg');
-  btn.onclick = async () => {
-    btn.disabled = true;
+  if (MODIMSG) { msg.className = 'admmsg ' + MODIMSG[0]; msg.textContent = MODIMSG[1]; MODIMSG = null; }
+
+  save.onclick = async () => {
+    save.disabled = calc.disabled = back.disabled = true;
+    msg.className = 'admmsg'; msg.textContent = 'zapisywanie…';
+    try {
+      MODVIEW = await api('/api/interface', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device: DEV.id, state: MODIFACE }),
+      });
+      MODIFACE = clone(MODVIEW.iface.state);
+      MODIMSG = ['ok', 'zapisano'];
+    } catch (e) { MODIMSG = ['bad', 'błąd: ' + e.message]; }
+    renderModules();
+  };
+  calc.onclick = async () => {
+    save.disabled = calc.disabled = back.disabled = true;
     msg.className = 'admmsg'; msg.textContent = 'liczenie…';
     try {
       MODPLAN = await api('/api/modules/derive', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device: DEV.id, ref: MODREF,
-                               state: MODEDIT[MODREF], addressing: MODADDR }),
+        body: JSON.stringify({ device: DEV.id, iface: MODIFACE }),
       });
-      Object.entries(MODPLAN.states).forEach(([n, st]) => { MODEDIT[+n] = st; });
-      renderModules();
-    } catch (e) {
-      msg.className = 'admmsg bad'; msg.textContent = 'błąd: ' + e.message;
-      btn.disabled = false;
-    }
+      Object.entries(MODPLAN.states).forEach(([n, x]) => { MODEDIT[+n] = x; });
+      MODIMSG = ['ok', 'karty adapterów wypełnione — nic nie jest jeszcze zapisane'];
+    } catch (e) { MODIMSG = ['bad', 'błąd: ' + e.message]; }
+    renderModules();
   };
-  bar.append(btn, msg);
+  back.onclick = () => { MODIFACE = clone(MODVIEW.iface.state); MODPLAN = null; renderModules(); };
+  bar.append(save, calc, back, msg);
+  card.appendChild(bar);
+  return card;
+}
 
-  const all = el('button', 'ghost small', 'Zapisz wszystkie');
+function BAUDNAME(st) {
+  const b3 = st.sw3[2], b4 = st.sw3[3];
+  return b3 && !b4 ? 19200 : (!b3 && b4 ? 38400 : (b3 && b4 ? 19200 : 9600));
+}
+
+function saveAllBar() {
+  const bar = el('div', 'derivebar');
+  bar.appendChild(el('span', 'dlab',
+    'Karty poniżej trzymają stan zastany na adapterach. Po wyliczeniu sprawdź je i zapisz.'));
+  bar.appendChild(el('span', 'grow'));
+  const all = el('button', 'ghost small', 'Zapisz wszystkie adaptery');
+  const msg = el('span', 'admmsg');
   all.onclick = async () => {
     all.disabled = true;
     msg.className = 'admmsg'; msg.textContent = 'zapisywanie…';
@@ -1100,40 +1195,42 @@ function deriveBar() {
           body: JSON.stringify({ device: DEV.id, n: m.n, state: MODEDIT[m.n] }),
         });
       }
-      MODVIEW.modules.forEach(x => { MODEDIT[x.n] = clone(x.state); });
-      MODVIEW.modules.forEach(x => { MODMSG[x.n] = ['ok', 'zapisano']; });
+      MODVIEW.modules.forEach(x => { MODEDIT[x.n] = clone(x.state); MODMSG[x.n] = ['ok', 'zapisano']; });
+      MODIFACE = clone(MODVIEW.iface.state);
       renderModules();
     } catch (e) {
       msg.className = 'admmsg bad'; msg.textContent = 'błąd: ' + e.message;
       all.disabled = false;
     }
   };
-  bar.append(all);
+  bar.append(all, msg);
   return bar;
 }
 
 function planBox() {
   const box = el('div', 'planbox');
-  const who = MODVIEW.modules.find(m => m.n === MODPLAN.ref);
   box.appendChild(el('div', 'planhead',
-    'Wyliczone z modułu „' + (who ? who.label : MODPLAN.ref) + '", adresowanie: '
-    + (MODPLAN.addressing === 'sequential' ? 'kolejno od głównego' : 'z config.json')));
+    'Wyliczone z interfejsu Modbus: slave ' + MODPLAN.slave + ', ' + MODPLAN.baud + ' bps, '
+    + (MODPLAN.iface.ccid === 'old' ? 'old controller' : 'central controller ID20')));
 
   const t = el('table', 'adm-t map');
-  t.innerHTML = '<thead><tr><th>Jednostka</th><th>Adres</th><th>SW64 / SW63</th>'
+  t.innerHTML = '<thead><tr><th>Jednostka</th><th>Adres centralny</th><th>SW64 / SW63</th>'
               + '<th>Terminator SW21 Bit1</th></tr></thead>';
   const tb = el('tbody'); t.appendChild(tb);
   MODPLAN.plan.forEach(p => {
     const tr = el('tr');
-    const nm = el('td', 'pname');
-    nm.innerHTML = p.label + (p.ref ? ' <span class="badge term">główny</span>' : '');
-    tr.appendChild(nm);
+    tr.appendChild(el('td', 'pname', p.label));
     tr.appendChild(el('td', 'mono2', String(p.addr)));
     tr.appendChild(el('td', 'mono2', p.sw64 + ' / ' + p.sw63));
     tr.appendChild(el('td', p.terminator ? 'chg' : 'fixed', p.terminator ? 'ON' : 'OFF'));
     tb.appendChild(tr);
   });
   box.appendChild(t);
+
+  box.appendChild(el('div', 'planhead', 'Co z czego wynika:'));
+  const ul = el('ul', 'whylist');
+  MODPLAN.why.forEach(w => { const li = el('li'); li.innerHTML = w; ul.appendChild(li); });
+  box.appendChild(ul);
 
   if (MODPLAN.notes.length) {
     const nt = el('table', 'adm-t');
@@ -1149,9 +1246,8 @@ function planBox() {
     box.appendChild(nt);
   }
   box.appendChild(el('p', 'admnote',
-    'Wyliczenie tylko wypełniło karty powyżej — nic jeszcze nie jest zapisane. '
-    + 'Bity wspólne dla całej magistrali (SW61 Bit2/3/4, SW62, SW21 Bit2) przeniosły się '
-    + 'z modułu głównego bez zmiany, adres i terminator policzyły się z reguł.'));
+    'Wyliczenie tylko wypełniło karty adapterów — nic nie jest zapisane. Adresy centralne biorą '
+    + 'się z pola n w config.json; interfejs ich nie ustawia, narzuca tylko ich zakres.'));
   return box;
 }
 
@@ -1161,13 +1257,15 @@ function renderModules() {
   if (!MODVIEW) { root.appendChild(el('p', 'admnote', 'wczytywanie…')); return; }
 
   const intro = el('div', 'adm wide');
-  intro.appendChild(el('h3', '', '1 · Stan przełączników w jednostkach wewnętrznych'));
+  intro.appendChild(el('h3', '', '1 · Interfejs Modbus i adaptery w jednostkach'));
   intro.appendChild(el('p', 'admnote',
     'Przełączniki siedzą na płytce adaptera TCB-SSRL011UUP-E wpiętego w złącze CN50 jednostki '
-    + 'wewnętrznej. Aplikacja ich nie czyta ani nie ustawia — klikanie tutaj niczego nie wysyła '
-    + 'na magistralę. Zapisujesz to, co widzisz na sprzęcie, a panel liczy różnicę względem '
-    + 'wartości wymaganej przez dokumentację.'));
-  intro.appendChild(deriveBar());
+    + 'wewnętrznej, a interfejs Modbus stoi przed nimi, na końcu kabla od bramki RS-485. '
+    + 'Aplikacja nie czyta ani nie ustawia żadnego z nich — klikanie tutaj niczego nie wysyła '
+    + 'na magistralę. Zapisujesz to, co widzisz na sprzęcie; ustawienia adapterów wyliczają się '
+    + 'z interfejsu, bo to on narzuca zakres adresów i terminację magistrali Uh.'));
+  intro.appendChild(ifaceCard());
+  intro.appendChild(saveAllBar());
   const grid = el('div', 'modgrid');
   MODVIEW.modules.forEach(m => grid.appendChild(moduleCard(m)));
   intro.appendChild(grid);

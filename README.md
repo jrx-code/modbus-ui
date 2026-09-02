@@ -51,11 +51,11 @@ state a human found on the board, computes the required state from the addresses
 config, and lists the exact moves between the two. Every rule is quoted from the vendor
 manual with a page reference; nothing here talks to the bus.
 
-Set one board up, mark it as the reference, and **Compute the rest** derives every other
-board from it: bus-wide bits are copied verbatim, addresses and the bus terminator follow
-from the rules. Addresses come either sequentially from the reference or from the config,
-whichever the site calls for. A reference that violates the manual is reported rather than
-silently propagated.
+The chain has a head: the interface module the RS-485 gateway plugs into. Record its
+switches once and **Compute the adapter settings** derives every adapter board behind it,
+because that module is what fixes the address range, the bus terminator and the protocol
+the adapters have to speak. The result is not a list of values but a list of consequences:
+each line says which interface setting forced it, with the manual page that says so.
 
 ![Adapter switches](docs/img/05-modules.png)
 
@@ -80,7 +80,7 @@ appended to an audit log.
 
 **Physical state is data, not guesswork.** The adapter switch view never claims to read
 hardware it cannot read. It stores what a human reported, derives the target from the
-configured addresses by rules, and reports the difference. Validation (address range,
+interface module and the configured addresses by rules, and reports the difference. Validation (address range,
 duplicate addresses, more than one bus terminator, switch combinations the manual marks
 `N/A`) is computed server-side from those rules, with a manual page cited on every finding.
 
@@ -116,7 +116,8 @@ deploy/
 | `POST /api/write` | perform the write (whitelist + audit) |
 | `GET /api/modules?device=ID` | adapter switch spec, target values, recorded state, diff |
 | `POST /api/modules` | record the switch state found on one adapter board |
-| `POST /api/modules/derive` | derive the remaining boards from a reference board (no writes) |
+| `POST /api/interface` | record the switch state of the interface module |
+| `POST /api/modules/derive` | derive the adapter boards from the interface module (no writes) |
 | `GET /api/audit` | last 100 writes |
 
 ## Install
