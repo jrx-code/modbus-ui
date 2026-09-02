@@ -176,18 +176,17 @@ dd{margin:0;font-family:ui-monospace,Menlo,monospace;word-break:break-all;font-s
 
 /* ---------- lancuch diagnostyczny ---------- */
 #trace{margin-bottom:22px}
-.chain{display:flex;align-items:stretch;gap:0;padding:16px 14px;overflow-x:auto}
-.node{flex:1;min-width:150px;border:1px solid var(--line);border-radius:9px;
+.chain{display:grid;gap:14px;padding:16px 14px;
+  grid-template-columns:repeat(auto-fit,minmax(440px,1fr))}
+.node{border:1px solid var(--line);border-radius:9px;
   padding:10px 12px;background:#121922;position:relative}
-.node+.node{margin-left:26px}
-.node+.node::before{content:"";position:absolute;left:-26px;top:50%;width:26px;height:2px;
-  background:var(--line2)}
+.node .no{position:absolute;top:9px;right:10px;font-size:10px;color:var(--dim);
+  border:1px solid var(--line);border-radius:99px;padding:1px 7px}
 .node.ok{border-color:#1d4527;background:#0f1b13}
 .node.warn{border-color:#5a4712;background:#1a1508}
 .node.fail{border-color:#5a2321;background:#1a1010}
 .node.skip{opacity:.5}
-.node.ok+.node::before,.node.warn+.node::before{background:var(--ok)}
-.node .nm{font-size:12px;font-weight:600;display:block;margin-bottom:4px}
+.node .nm{font-size:12px;font-weight:600;display:block;margin-bottom:4px;padding-right:34px}
 .node .st{font-size:11px;text-transform:uppercase;letter-spacing:.5px}
 .node.ok .st{color:var(--ok)} .node.warn .st{color:var(--warn)}
 .node.fail .st{color:var(--bad)} .node.skip .st{color:var(--dim)}
@@ -210,9 +209,8 @@ dd{margin:0;font-family:ui-monospace,Menlo,monospace;word-break:break-all;font-s
   border-radius:0 0 9px 9px;background:linear-gradient(90deg,transparent,var(--acc),transparent);
   animation:scan 1.1s linear infinite}
 @keyframes scan{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
-.node.run+.node::before{background:var(--line2)}
 .frames{margin-top:8px;border-top:1px solid var(--line);padding-top:7px;
-  display:flex;flex-direction:column;gap:2px;max-height:190px;overflow:auto}
+  display:flex;flex-direction:column;gap:1px}
 .fr{font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
 .fr .d{display:inline-block;width:26px;color:var(--dim)}
 .fr.tx{color:#79c0ff}

@@ -383,6 +383,22 @@ const hhmmss = ts => {
          '.' + String(d.getMilliseconds()).padStart(3, '0');
 };
 const grp = h => (h || '').replace(/(..)/g, '$1 ').trim();
+const BPL = 16;                       // bajtow na linie — 48 znakow, mniej niz szerokosc kafelka
+function hexChunks(h) {
+  const bytes = (h || '').match(/../g) || [];
+  const out = [];
+  for (let i = 0; i < bytes.length; i += BPL) out.push(bytes.slice(i, i + BPL).join(' '));
+  return out.length ? out : [''];
+}
+function hexRows(box, label, hex, cls, ms) {
+  hexChunks(hex).forEach((chunk, i, all) => {
+    const line = el('div', 'fr ' + cls);
+    line.appendChild(el('span', 'd', i === 0 ? label : ''));
+    line.appendChild(document.createTextNode(' ' + chunk));
+    if (ms != null && i === all.length - 1) line.appendChild(el('span', 'ms', ms + ' ms'));
+    box.appendChild(line);
+  });
+}
 
 function termLine(cls, ts, body) {
   const d = el('div', 'tl ' + cls);
@@ -468,16 +484,9 @@ function frameRows(frames, ioRows) {
     box.appendChild(line);
   });
   (frames || []).forEach(f => {
-    const tx = el('div', 'fr tx');
-    tx.appendChild(el('span', 'd', 'TX'));
-    tx.appendChild(document.createTextNode(' ' + grp(f.tx)));
-    box.appendChild(tx);
+    hexRows(box, 'TX', f.tx, 'tx', null);
     if (f.ok && f.rx) {
-      const rx = el('div', 'fr rx');
-      rx.appendChild(el('span', 'd', 'RX'));
-      rx.appendChild(document.createTextNode(' ' + grp(f.rx)));
-      rx.appendChild(el('span', 'ms', f.ms + ' ms'));
-      box.appendChild(rx);
+      hexRows(box, 'RX', f.rx, 'rx', f.ms);
     } else {
       const er = el('div', 'fr err');
       er.appendChild(el('span', 'd', 'ERR'));
@@ -508,9 +517,10 @@ function traceSkeleton() {
    ['net', `Bramka ${DEV.host}:${DEV.port}`],
    ['iface', `Interfejs Modbus (slave ${DEV.slave})`],
    ['rs485', 'Magistrala RS-485'],
-   ['uh', 'Magistrala Uh (TU2C-LINK)']].forEach(([id, name]) => {
+   ['uh', 'Magistrala Uh (TU2C-LINK)']].forEach(([id, name], i, all) => {
     const n = el('div', 'node pending');
     n.dataset.id = id;
+    n.appendChild(el('span', 'no', (i + 1) + '/' + all.length));
     n.appendChild(el('span', 'nm', name));
     n.appendChild(el('span', 'st', TRACE_LBL.pending));
     n.appendChild(el('span', 'dt', ''));
@@ -562,9 +572,10 @@ async function runTrace() {
 
         if (ev.type === 'plan') {
           const chain = $('#chain');
-          ev.steps.forEach(stp => {
+          ev.steps.forEach((stp, i) => {
             const n = el('div', 'node pending');
             n.dataset.id = stp.id;
+            n.appendChild(el('span', 'no', (i + 1) + '/' + ev.steps.length));
             n.appendChild(el('span', 'nm', stp.name));
             n.appendChild(el('span', 'st', TRACE_LBL.pending));
             n.appendChild(el('span', 'dt', ''));
