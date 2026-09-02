@@ -38,19 +38,35 @@ FUNC_NAMES = {
 }
 
 
+_CTX = threading.local()
+
+
 class TxLog:
-    """Pierscieniowy bufor transakcji — zasila terminal na zywo w UI."""
+    """Pierscieniowy bufor transakcji — zasila terminal na zywo w UI.
+
+    Kazdy wpis niesie `ctx` — etykiete watku, ktory go wygenerowal. Bez tego
+    diagnostyka lapalaby ramki z rownoleglego auto-odswiezania i przypisywala
+    je do swoich krokow."""
 
     def __init__(self, size: int = 600):
         self._buf = collections.deque(maxlen=size)
         self._lock = threading.Lock()
         self._seq = 0
 
+    @staticmethod
+    def set_ctx(value) -> None:
+        _CTX.v = value
+
+    @staticmethod
+    def ctx():
+        return getattr(_CTX, "v", None)
+
     def add(self, **kw) -> None:
         with self._lock:
             self._seq += 1
             kw["seq"] = self._seq
             kw["ts"] = time.time()
+            kw.setdefault("ctx", self.ctx())
             self._buf.append(kw)
 
     def since(self, seq: int, limit: int = 400) -> list[dict]:

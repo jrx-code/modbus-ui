@@ -243,21 +243,40 @@ def preview_write(dev: dict, key: str, value) -> dict:
 
 # --------------------------------------------------------------------------- diagnostyka
 
-def _tcp_probe(host: str, port: int, timeout: float = 3.0):
+def _tcp_probe(host: str, port: int, timeout: float = 3.0) -> dict:
+    """Sonda TCP. Zwraca tez koncowki polaczenia, zeby bylo widac ktorym
+    interfejsem wyszlo zapytanie — przy dwoch kartach sieciowych to istotne."""
     import socket as _s
+    out = {"ok": False, "ms": None, "err": None, "local": None, "peer": None,
+           "resolved": None}
     t0 = time.monotonic()
     try:
-        c = _s.create_connection((host, port), timeout=timeout)
-        c.close()
-        return True, round((time.monotonic() - t0) * 1000, 1), None
+        infos = _s.getaddrinfo(host, port, proto=_s.IPPROTO_TCP)
+        out["resolved"] = infos[0][4][0] if infos else None
     except OSError as exc:
-        return False, round((time.monotonic() - t0) * 1000, 1), str(exc)
+        out["err"] = f"nie rozwiazano nazwy: {exc}"
+        out["ms"] = round((time.monotonic() - t0) * 1000, 1)
+        return out
+    try:
+        c = _s.create_connection((host, port), timeout=timeout)
+        out["local"] = "%s:%s" % c.getsockname()[:2]
+        out["peer"] = "%s:%s" % c.getpeername()[:2]
+        c.close()
+        out["ok"] = True
+    except OSError as exc:
+        out["err"] = str(exc)
+    out["ms"] = round((time.monotonic() - t0) * 1000, 1)
+    return out
 
 
-def _frames_since(mark: int) -> list[dict]:
+def _frames_since(mark: int, ctx=None) -> list[dict]:
+    """Tylko ramki z tego samego watku — inaczej wpadaja tu odczyty
+    z rownolegle biegnacego auto-odswiezania panelu."""
     out = []
     for e in TXLOG.since(mark):
         if e.get("kind") != "tx":
+            continue
+        if ctx is not None and e.get("ctx") != ctx:
             continue
         out.append({"tx": e["tx"], "rx": e.get("rx"), "ms": e.get("ms"),
                     "ok": e.get("ok"), "err": e.get("err"),
@@ -270,6 +289,8 @@ def trace_steps(dev: dict):
     najpierw ze stanem 'run', potem z wynikiem i ramkami, ktore poszly na magistrale."""
     client: ModbusClient = dev["client"]
     slave = dev["slave"]
+    ctx = f"trace-{dev['id']}-{int(time.time() * 1000)}"
+    TXLOG.set_ctx(ctx)
     TXLOG.note(dev["id"], "diagnostyka lancucha — start")
 
     plan = [
@@ -285,16 +306,42 @@ def trace_steps(dev: dict):
         yield_ = {"type": "step", "id": sid, "state": "run"}
         return yield_
 
-    # 1 — aplikacja
+    # 1 — aplikacja: nic nie idzie na magistrale, wiec pokazujemy co zostalo sprawdzone
     yield start("app")
+    spaces = {}
+    for r in dev["registers"]:
+        spaces[r["space"]] = spaces.get(r["space"], 0) + 1
+    writable = sum(1 for r in dev["registers"] if r.get("writable"))
     yield {"type": "step", "id": "app", "state": "ok",
-           "detail": f"{len(dev['registers'])} rejestrow w mapie", "frames": []}
+           "detail": f"{len(dev['registers'])} rejestrow w mapie",
+           "frames": [],
+           "io": [
+               {"d": "?", "text": f"konfiguracja: {CONFIG_FILE}"},
+               {"d": "=", "text": f"urzadzenie \"{dev['id']}\" — mapa \"{dev.get('map')}\", "
+                                  f"ramkowanie {dev.get('framing')}, slave {slave}, "
+                                  f"timeout {dev.get('timeout', 2.5)} s"},
+               {"d": "=", "text": "rejestry: " + ", ".join(
+                   f"{k} {v}" for k, v in sorted(spaces.items()))},
+               {"d": "=", "text": f"zapisywalnych {writable}, "
+                                  f"zapis {'wlaczony' if dev.get('write_enabled') else 'WYLACZONY'}"},
+           ]}
 
     # 2 — siec do bramki
     yield start("net")
-    ok, ms, err = _tcp_probe(dev["host"], dev["port"])
+    pr = _tcp_probe(dev["host"], dev["port"])
+    ok, ms = pr["ok"], pr["ms"]
+    net_io = [{"d": "?", "text": f"cel: {dev['host']}:{dev['port']}"
+                                 + (f" -> {pr['resolved']}" if pr["resolved"]
+                                    and pr["resolved"] != dev["host"] else "")}]
+    if ok:
+        net_io.append({"d": "TX", "text": f"SYN {pr['local']} -> {pr['peer']}"})
+        net_io.append({"d": "RX", "text": "SYN/ACK — gniazdo otwarte", "ms": ms})
+    else:
+        net_io.append({"d": "TX", "text": f"SYN -> {dev['host']}:{dev['port']}"})
+        net_io.append({"d": "ERR", "text": pr["err"] or "brak odpowiedzi", "ms": ms})
     yield {"type": "step", "id": "net", "state": "ok" if ok else "fail", "ms": ms,
-           "detail": f"TCP nawiazane w {ms} ms" if ok else err, "frames": [],
+           "detail": f"TCP nawiazane w {ms} ms" if ok else pr["err"],
+           "frames": [], "io": net_io,
            "hint": None if ok else "Sprawdz zasilanie i WiFi bramki oraz jej adres IP."}
 
     if not ok:
@@ -314,7 +361,7 @@ def trace_steps(dev: dict):
             alive.append(s_addr)
         except (ModbusError, OSError):
             pass
-    frames = _frames_since(mark)
+    frames = _frames_since(mark, ctx)
     ms = next((f["ms"] for f in frames if f["ok"]), None)
     yield {"type": "step", "id": "iface", "state": "ok" if slave in alive else "fail",
            "ms": ms, "frames": frames,
@@ -342,7 +389,7 @@ def trace_steps(dev: dict):
             counters[label] = None
     crc = counters.get("bledy_crc")
     yield {"type": "step", "id": "rs485", "state": "ok" if crc == 0 else "warn",
-           "frames": _frames_since(mark),
+           "frames": _frames_since(mark, ctx),
            "detail": f"ramek {counters.get('ramki')}, bledow CRC {crc}, "
                      f"do tego slave {counters.get('do_slave')}",
            "hint": None if crc == 0 else
@@ -364,13 +411,13 @@ def trace_steps(dev: dict):
         except (ModbusError, OSError) as exc:
             u = {"iu": r.get("iu"), "label": r.get("iu_label"),
                  "present": False, "error": str(exc)}
-        u["frames"] = _frames_since(mark)
+        u["frames"] = _frames_since(mark, ctx)
         units_out.append(u)
         yield {"type": "unit", "unit": u}
 
     n_present = sum(1 for u in units_out if u["present"])
     yield {"type": "step", "id": "uh", "state": "ok" if n_present else "warn",
-           "frames": _frames_since(mark_all),
+           "frames": _frames_since(mark_all, ctx),
            "detail": f"{n_present} z {len(units_out)} jednostek odpowiada",
            "hint": None if n_present else
            "Zaden RAC interface nie odpowiada. Jesli nie sa jeszcze zamontowane — to stan oczekiwany. "

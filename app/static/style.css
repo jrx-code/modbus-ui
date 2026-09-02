@@ -219,5 +219,10 @@ dd{margin:0;font-family:ui-monospace,Menlo,monospace;word-break:break-all;font-s
 .fr.rx{color:#56d364}
 .fr.err{color:var(--bad)}
 .fr .ms{color:var(--dim);margin-left:8px}
+.fr.q{color:var(--mut)}
+.fr.eq{color:var(--mut)}
+.fr.q .d,.fr.eq .d{width:14px}
+.fr{white-space:pre-wrap;word-break:break-word}
+.fr.tx,.fr.rx{white-space:nowrap}
 .frames::-webkit-scrollbar{height:8px;width:8px}
 .frames::-webkit-scrollbar-thumb{background:#2b3644;border-radius:4px}

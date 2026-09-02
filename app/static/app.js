@@ -456,8 +456,17 @@ function termToggle() {
 const TRACE_LBL = { pending: 'oczekuje', run: 'trwa…', ok: 'OK',
                     warn: 'uwaga', fail: 'błąd', skip: 'pominięte' };
 
-function frameRows(frames) {
+const IO_CLS = { TX: 'tx', RX: 'rx', ERR: 'err', '?': 'q', '=': 'eq' };
+
+function frameRows(frames, ioRows) {
   const box = el('div', 'frames');
+  (ioRows || []).forEach(r => {
+    const line = el('div', 'fr ' + (IO_CLS[r.d] || 'eq'));
+    line.appendChild(el('span', 'd', r.d === '=' ? '' : r.d));
+    line.appendChild(document.createTextNode(' ' + r.text));
+    if (r.ms != null) line.appendChild(el('span', 'ms', r.ms + ' ms'));
+    box.appendChild(line);
+  });
   (frames || []).forEach(f => {
     const tx = el('div', 'fr tx');
     tx.appendChild(el('span', 'd', 'TX'));
@@ -488,7 +497,8 @@ function paintNode(id, st) {
   n.querySelector('.dt').textContent = st.detail || '';
   const old = n.querySelector('.frames');
   if (old) old.remove();
-  if (st.frames && st.frames.length) n.appendChild(frameRows(st.frames));
+  if ((st.frames && st.frames.length) || (st.io && st.io.length))
+    n.appendChild(frameRows(st.frames, st.io));
 }
 
 function traceSkeleton() {
