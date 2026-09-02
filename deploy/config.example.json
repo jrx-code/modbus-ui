@@ -12,10 +12,25 @@
       "write_enabled": true,
       "map": "toshiba",
       "units": [
-        {"n": 1, "label": "Bedroom"},
-        {"n": 2, "label": "Study"},
-        {"n": 3, "label": "Office"}
+        {
+          "n": 1,
+          "label": "Bedroom"
+        },
+        {
+          "n": 2,
+          "label": "Study"
+        },
+        {
+          "n": 3,
+          "label": "Office"
+        }
       ]
     }
-  ]
+  ],
+  "ai": {
+    "enabled": true,
+    "url": "http://192.0.2.20:11434",
+    "model": "qwen2.5:3b-instruct-q5_K_M",
+    "timeout": 45
+  }
 }

@@ -224,3 +224,27 @@ dd{margin:0;font-family:ui-monospace,Menlo,monospace;word-break:break-all;font-s
 .fr.tx,.fr.rx{white-space:nowrap}
 .frames::-webkit-scrollbar{height:8px;width:8px}
 .frames::-webkit-scrollbar-thumb{background:#2b3644;border-radius:4px}
+
+/* ---------- kafelek Wynik ---------- */
+.node.verdict{grid-column:1/-1;background:#141b24}
+.node.verdict .nm{font-size:13px;padding-right:0}
+.node.verdict .st{font-size:13px;text-transform:none;letter-spacing:0;font-weight:600}
+.node.verdict.ok{border-color:#1d4527} .node.verdict.ok .st{color:var(--ok)}
+.node.verdict.warn{border-color:#5a4712} .node.verdict.warn .st{color:var(--warn)}
+.node.verdict.fail{border-color:#5a2321} .node.verdict.fail .st{color:var(--bad)}
+.vbody{margin-top:10px;display:grid;gap:12px 24px;
+  grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start}
+.vcol{min-width:0}
+.vbody h4{margin:0 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+.vbody h4.good{color:var(--ok)} .vbody h4.bad{color:var(--bad)} .vbody h4.todo{color:var(--warn)}
+.vbody ul{margin:0 0 8px;padding-left:16px;font-size:12px;color:var(--fg)}
+.vbody ul.todo li{color:#e5c76b}
+.vbody li{margin-bottom:3px}
+.aibox{margin-top:10px;padding:9px 11px;border-radius:8px;background:#101a26;
+  border:1px solid #1d3348;font-size:12.5px;line-height:1.55;color:#cfe4ff}
+.aibox.off{background:#151b23;border-color:var(--line);color:var(--dim);font-style:italic}
+.aibox.run{color:var(--acc);border-color:var(--acc2)}
+.ailabel{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.5px;
+  background:var(--acc2);color:#fff;border-radius:4px;padding:1px 6px;margin-right:6px}
+.aimodel{display:block;margin-top:6px;font-size:10.5px;color:var(--dim);
+  font-family:ui-monospace,Menlo,monospace}

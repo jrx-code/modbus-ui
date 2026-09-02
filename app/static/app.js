@@ -497,6 +497,34 @@ function frameRows(frames, ioRows) {
   return box;
 }
 
+function renderVerdict(v) {
+  const chain = $('#chain');
+  const old = chain.querySelector('.node.verdict');
+  if (old) old.remove();
+  const n = el('div', 'node verdict ' + v.level);
+  n.appendChild(el('span', 'nm', 'Wynik'));
+  n.appendChild(el('span', 'st', v.head));
+  const body = el('div', 'vbody');
+  const sect = (title, items, cls) => {
+    if (!items || !items.length) return;
+    const col = el('div', 'vcol');          // naglowek i lista musza byc jedna komorka siatki
+    col.appendChild(el('h4', cls, title));
+    const ul = el('ul', cls);
+    items.forEach(t => ul.appendChild(el('li', '', t)));
+    col.appendChild(ul);
+    body.appendChild(col);
+  };
+  sect('Dzia\u0142a', v.ok, 'good');
+  sect('Nie dzia\u0142a', v.bad, 'bad');
+  sect('Co zrobi\u0107', v.todo, 'todo');
+  n.appendChild(body);
+  const ai = el('div', 'aibox off');
+  ai.id = 'aibox';
+  ai.textContent = 'komentarz AI wy\u0142\u0105czony w konfiguracji';
+  n.appendChild(ai);
+  chain.appendChild(n);
+}
+
 function paintNode(id, st) {
   const n = document.querySelector(`.node[data-id="${id}"]`);
   if (!n) return;
@@ -588,6 +616,22 @@ async function runTrace() {
           const u = ev.unit;
           unitBoxes.appendChild(el('div', 'ubox ' + (u.present ? 'on' : 'off'),
             `${u.label}: ${u.present ? (u.model || 'obecna') : 'brak odpowiedzi'}`));
+        } else if (ev.type === 'verdict') {
+          renderVerdict(ev);
+        } else if (ev.type === 'verdict_ai') {
+          const box = $('#aibox');
+          if (!box) continue;
+          if (ev.state === 'run') { box.className = 'aibox run'; box.textContent = 'analiza lokalnego modelu…'; }
+          else if (ev.text) {
+            box.className = 'aibox';
+            box.innerHTML = '';
+            box.appendChild(el('span', 'ailabel', 'AI'));
+            box.appendChild(document.createTextNode(' ' + ev.text));
+            if (ev.model) box.appendChild(el('span', 'aimodel', ev.model));
+          } else {
+            box.className = 'aibox off';
+            box.textContent = 'lokalny model nie odpowiedzia\u0142 — werdykt powy\u017cej pochodzi z regu\u0142, nie z AI';
+          }
         } else if (ev.type === 'error') {
           throw new Error(ev.error);
         }

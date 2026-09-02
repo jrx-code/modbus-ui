@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import urllib.request
 import sys
 import time
 import traceback
@@ -284,7 +286,97 @@ def _frames_since(mark: int, ctx=None) -> list[dict]:
     return out
 
 
-def trace_steps(dev: dict):
+def build_verdict(steps: list[dict], units: list[dict]) -> dict:
+    """Werdykt liczony z faktow, nie z modelu jezykowego. Zawsze dostepny."""
+    by = {s["id"]: s for s in steps}
+    ok, bad, todo = [], [], []
+
+    def st(i):
+        return (by.get(i) or {}).get("state")
+
+    if st("app") == "ok":
+        ok.append(f"Aplikacja czyta mape rejestrow: {by['app'].get('detail')}.")
+    if st("net") == "ok":
+        ok.append(f"Bramka szeregowa odpowiada — {by['net'].get('detail')}.")
+    elif st("net") == "fail":
+        bad.append(f"Brak polaczenia z bramka: {by['net'].get('detail')}.")
+        todo.append("Sprawdz zasilanie bramki, jej polaczenie z siecia i adres IP w konfiguracji.")
+    if st("iface") == "ok":
+        ok.append(f"Interfejs Modbus odpowiada — {by['iface'].get('detail')}.")
+    elif st("iface") == "fail":
+        bad.append("Interfejs Modbus nie odpowiada mimo dzialajacej bramki.")
+        todo.append("Adres slave SW1 musi byc w zakresie 1-F (przy 0 modul milczy); "
+                    "po zmianie wcisnij SW7. Sprawdz zgodnosc predkosci (SW3) i parzystosci EVEN.")
+    crc = None
+    if st("rs485") in ("ok", "warn"):
+        d = by["rs485"].get("detail") or ""
+        m = re.search(r"bledow CRC (\d+)", d)
+        crc = int(m.group(1)) if m else None
+        if crc == 0:
+            ok.append("Warstwa fizyczna RS-485 czysta — zero bledow CRC.")
+        else:
+            bad.append(f"Na magistrali RS-485 jest {crc} bledow CRC.")
+            todo.append("Bledy CRC to warstwa fizyczna: terminacja SW5 (120 om), "
+                        "ekran przewodu uziemiony w jednym punkcie, dlugosc linii.")
+    present = [u for u in units if u.get("present")]
+    absent = [u for u in units if not u.get("present")]
+    if units:
+        if present:
+            ok.append(f"Na magistrali Uh odpowiada {len(present)} z {len(units)} jednostek: "
+                      + ", ".join(u["label"] for u in present) + ".")
+        if absent:
+            bad.append(f"Nie odpowiada {len(absent)} z {len(units)} jednostek: "
+                       + ", ".join(u["label"] for u in absent) + ".")
+            todo.append("Jesli RAC interface nie sa jeszcze zamontowane — to stan oczekiwany. "
+                        "Jesli sa: SW62 Bit3 = ON (Central Address = Indoor Address), "
+                        "SW61 Bit3 = ON (TU2C-LINK), Central controller ID = old controller, "
+                        "a po kazdej zmianie ustawien restart interfejsu Modbus.")
+
+    healthy = st("net") == "ok" and st("iface") == "ok" and crc == 0
+    if healthy and not present:
+        head = "Tor komunikacji sprawny na calej dlugosci, brak jednostek na magistrali Uh."
+        level = "warn"
+    elif healthy:
+        head = "Wszystko dziala."
+        level = "ok"
+    else:
+        head = "Tor komunikacji przerwany."
+        level = "fail"
+    return {"level": level, "head": head, "ok": ok, "bad": bad, "todo": todo}
+
+
+def ai_comment(dev: dict, verdict: dict) -> str | None:
+    """Opcjonalny komentarz z lokalnego modelu. Bledy sa polykane —
+    werdykt musi dzialac takze bez AI."""
+    cfg = CFG.get("ai") or {}
+    if not cfg.get("enabled"):
+        return None
+    facts = [verdict["head"]]
+    facts += ["DZIALA: " + x for x in verdict["ok"]]
+    facts += ["NIE DZIALA: " + x for x in verdict["bad"]]
+    facts += ["DO SPRAWDZENIA: " + x for x in verdict["todo"]]
+    prompt = (
+        "Jestes inzynierem automatyki. Ponizej surowe wyniki testu magistrali Modbus "
+        f"dla urzadzenia: {dev.get('name')}.\n\n"
+        + "\n".join("- " + f for f in facts)
+        + "\n\nNapisz po polsku zwiezle podsumowanie dla technika: co dziala, co nie, "
+          "i co zrobic w nastepnej kolejnosci. Maksymalnie 4 zdania. Nie wymyslaj faktow "
+          "spoza listy. Nie uzywaj list ani naglowkow, sam tekst."
+    )
+    body = json.dumps({"model": cfg.get("model", "qwen2.5:3b-instruct-q5_K_M"),
+                       "prompt": prompt, "stream": False,
+                       "options": {"temperature": 0.2, "num_predict": 220}}).encode()
+    try:
+        req = urllib.request.Request(cfg["url"].rstrip("/") + "/api/generate", body,
+                                     {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=float(cfg.get("timeout", 45))) as r:
+            return (json.load(r).get("response") or "").strip() or None
+    except Exception as exc:  # noqa: BLE001
+        log(f"AI niedostepne: {exc}")
+        return None
+
+
+def _trace_raw(dev: dict):
     """Generator krokow diagnostyki. Kazdy krok emitowany dwa razy:
     najpierw ze stanem 'run', potem z wynikiem i ramkami, ktore poszly na magistrale."""
     client: ModbusClient = dev["client"]
@@ -303,8 +395,7 @@ def trace_steps(dev: dict):
     yield {"type": "plan", "steps": [{"id": i, "name": n} for i, n in plan]}
 
     def start(sid):
-        yield_ = {"type": "step", "id": sid, "state": "run"}
-        return yield_
+        return {"type": "step", "id": sid, "state": "run"}
 
     # 1 — aplikacja: nic nie idzie na magistrale, wiec pokazujemy co zostalo sprawdzone
     yield start("app")
@@ -424,6 +515,27 @@ def trace_steps(dev: dict):
            "Jesli sa: sprawdz SW62 Bit3 = ON, SW61 Bit3 = ON oraz Central controller ID = old controller."}
     TXLOG.note(dev["id"], "diagnostyka lancucha — koniec", "ok")
     yield {"type": "done"}
+
+
+def trace_steps(dev: dict):
+    """Opakowuje surowy przebieg: zbiera kroki i na koncu emituje werdykt.
+    Werdykt liczony jest zawsze; komentarz AI tylko jesli skonfigurowany i odpowie."""
+    steps, units = [], []
+    for ev in _trace_raw(dev):
+        if ev.get("type") == "done":
+            v = build_verdict(steps, units)
+            yield {"type": "verdict", **v}
+            if (CFG.get("ai") or {}).get("enabled"):
+                yield {"type": "verdict_ai", "state": "run"}
+                txt = ai_comment(dev, v)
+                yield {"type": "verdict_ai", "state": "ok" if txt else "fail",
+                       "text": txt,
+                       "model": (CFG.get("ai") or {}).get("model") if txt else None}
+        if ev.get("type") == "step" and ev.get("state") != "run":
+            steps.append(ev)
+        elif ev.get("type") == "unit":
+            units.append(ev["unit"])
+        yield ev
 
 
 def trace_device(dev: dict) -> dict:
