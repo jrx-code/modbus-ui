@@ -22,6 +22,7 @@
       <option value="60">60 s</option>
     </select>
   </label>
+  <button id="adminbtn" class="ghost">Tryb administracyjny</button>
   <button id="tracebtn" class="ghost">Diagnostyka</button>
   <button id="termbtn" class="ghost" title="Podgląd ramek na żywo">Terminal</button>
   <button id="refresh" class="primary">Odczytaj</button>
@@ -35,6 +36,16 @@
 
 <div class="shell">
 <main>
+  <section id="admin" class="panel hidden">
+    <header class="panel-head">
+      <strong>Tryb administracyjny</strong>
+      <span class="note">parametry łącza i ich odpowiedniki po stronie Toshiby</span>
+      <div class="grow"></div>
+      <button id="adminclose" class="ghost small">Zamknij</button>
+    </header>
+    <div id="adminbody"></div>
+  </section>
+
   <section id="trace" class="panel hidden">
     <header class="panel-head">
       <strong>Diagnostyka łańcucha</strong>

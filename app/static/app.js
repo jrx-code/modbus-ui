@@ -650,6 +650,160 @@ async function runTrace() {
   $('#tracerun').disabled = false;
 }
 
+
+// ---------------------------------------------------------------- tryb administracyjny
+
+// Wartosci ze specyfikacji Toshiby (Service Manual A10-2103 rev. 7, rozdz. 7)
+// oraz z instrukcji bramek. Nie zgadywane.
+const BAUDS = [
+  { v: 9600,  sw3: 'Bit3 OFF · Bit4 OFF', note: 'ustawienie fabryczne u nas' },
+  { v: 19200, sw3: 'Bit3 ON · Bit4 OFF',  note: 'Bit3 ON + Bit4 ON daje to samo 19200' },
+  { v: 38400, sw3: 'Bit3 OFF · Bit4 ON',  note: 'najszybsze, jakie interfejs przyjmuje' },
+];
+
+const GATEWAYS = {
+  ew11: {
+    name: 'Elfin EW11',
+    panel: 'panel webowy, logowanie admin/admin (domyslne — zmienic)',
+    serial: 'Serial Port Settings: Baud Rate / Data Bit / Stop Bit / Parity',
+    mode: 'Communication Settings: Protocol = Tcp Server, Local Port 8899, Rout = Uart',
+    framing: 'rtuovertcp',
+    framingWhy: 'EW11 przepuszcza bajty bez konwersji, wiec po TCP ida surowe ramki RTU z CRC.',
+    apply: 'Submit na stronie serial; zmiana predkosci dziala od razu, bez restartu modulu.',
+  },
+  waveshare: {
+    name: 'Waveshare RS232/485 TO WIFI (POE) ETH (B)',
+    panel: 'panel webowy, logowanie admin/admin (domyslne — zmienic)',
+    serial: 'Serial: uart_baudrate / uart_bits / uart_parity / uart_stop / uart_fc',
+    mode: 'Data_Transfor_Mode = 5 (Modbus TCP <=> Modbus RTU), net_mode server, net_port 502',
+    framing: 'tcp',
+    framingWhy: 'W trybie 5 bramka sama konwertuje MBAP na RTU, wiec aplikacja laczy sie zwyklym Modbus TCP.',
+    apply: 'Apply na stronie, potem Restart modulu.',
+  },
+};
+
+function adminRow(k, v, cls) {
+  const tr = el('tr');
+  tr.appendChild(el('th', '', k));
+  const td = el('td', cls || '');
+  td.innerHTML = v;
+  tr.appendChild(td);
+  return tr;
+}
+
+function renderAdmin() {
+  const gw = (DEV.gateway || {});
+  const g = GATEWAYS[gw.type] || GATEWAYS.ew11;
+  const root = $('#adminbody');
+  root.innerHTML = '';
+
+  // --- 1. co widzi aplikacja
+  const s1 = el('div', 'adm');
+  s1.appendChild(el('h3', '', '1 · Czym aplikacja laczy sie z bramka'));
+  const t1 = el('table', 'adm-t');
+  [['Adres', `<span class="mono">${DEV.host}:${DEV.port}</span>`],
+   ['Ramkowanie', `<span class="mono">${DEV.framing}</span> — ${g.framingWhy}`],
+   ['Adres slave', `<span class="mono">${DEV.slave}</span> (interfejs zajmuje tez ${DEV.slave + 1} i ${DEV.slave + 2})`],
+   ['Timeout', `<span class="mono">${DEV.timeout} s</span>`],
+   ['Zapis', DEV.write_enabled ? 'wlaczony' : 'WYLACZONY'],
+  ].forEach(([k, v]) => t1.appendChild(adminRow(k, v)));
+  s1.appendChild(t1);
+  root.appendChild(s1);
+
+  // --- 2. strona bramki
+  const s2 = el('div', 'adm');
+  s2.appendChild(el('h3', '', '2 · Bramka RS-485 / WiFi — ' + g.name));
+  const t2 = el('table', 'adm-t');
+  const link = gw.url ? `<a href="${gw.url}" target="_blank" rel="noreferrer">${gw.url}</a>` : '—';
+  [['Panel', link + ' — ' + g.panel],
+   ['Parametry portu', g.serial],
+   ['Tryb pracy', g.mode],
+   ['Zatwierdzenie', g.apply],
+  ].forEach(([k, v]) => t2.appendChild(adminRow(k, v)));
+  if (gw.note) t2.appendChild(adminRow('Uwaga', gw.note, 'warnc'));
+  s2.appendChild(t2);
+  root.appendChild(s2);
+
+  // --- 3. strona Toshiby
+  const s3 = el('div', 'adm');
+  s3.appendChild(el('h3', '', '3 · Interfejs Toshiba BMS-IFMB1280U-E — przelaczniki'));
+  const t3 = el('table', 'adm-t');
+  [['SW1', 'adres slave Modbus, zakres <span class="mono">1–F</span>. '
+         + '<b>Przy 0 modul nie odpowiada na nic.</b> Po zmianie wcisnij <span class="mono">SW7</span>.'],
+   ['SW2', 'przelacznik testowy — ma byc <span class="mono">0</span>'],
+   ['SW3 Bit1', 'tryb ustawiania Central controller ID — <span class="mono">OFF</span> w normalnej pracy'],
+   ['SW3 Bit2', 'zrodlo dla LED5: <span class="mono">OFF</span> = RS-485, <span class="mono">ON</span> = Uh line'],
+   ['SW3 Bit3/4', 'predkosc RS-485 — patrz tabela nizej. Po zmianie wcisnij <span class="mono">SW7</span>.'],
+   ['SW5', 'terminator RS-485 <span class="mono">120 Ω</span> — strona <span class="mono">ON</span>. '
+         + 'Wlaczyc tylko na interfejsie o adresie 1.'],
+   ['SW6', 'terminator magistrali Uh — zostawic <span class="mono">open</span>, '
+         + 'terminacje robi RAC I/F przez SW21'],
+   ['SW7', 'reset — czyta na nowo SW1 i SW3'],
+   ['Central controller ID', 'przy podlaczonych RAC I/F musi byc <span class="mono">old controller</span>: '
+         + 'SW3 Bit1 → ON, SW1 → F, wcisnij SW4, SW3 Bit1 → OFF, <b>SW1 z powrotem na adres</b>, SW7'],
+  ].forEach(([k, v]) => t3.appendChild(adminRow(k, v)));
+  s3.appendChild(t3);
+  root.appendChild(s3);
+
+  // --- 4. odwzorowanie parametrow
+  const s4 = el('div', 'adm wide');
+  s4.appendChild(el('h3', '', '4 · Co ustawic po obu stronach'));
+  const sel = el('select');
+  BAUDS.forEach(b => sel.add(new Option(b.v + ' bps', b.v)));
+  sel.value = 9600;
+  const pick = el('div', 'baudpick');
+  pick.appendChild(el('label', '', 'Docelowa predkosc:'));
+  pick.appendChild(sel);
+  s4.appendChild(pick);
+
+  const t4 = el('table', 'adm-t map');
+  t4.innerHTML = '<thead><tr><th>Parametr</th><th>Bramka ' + g.name + '</th>'
+               + '<th>Toshiba BMS-IFMB1280U-E</th><th>Zmienne?</th></tr></thead>';
+  const tb = el('tbody');
+  t4.appendChild(tb);
+  const paint = () => {
+    const b = BAUDS.find(x => String(x.v) === sel.value);
+    tb.innerHTML = '';
+    [['Predkosc', `<span class="mono">${b.v}</span> bps`,
+      `<span class="mono">SW3 ${b.sw3}</span><br><span class="sub">${b.note}</span>`, 'tak'],
+     ['Bity danych', '<span class="mono">8</span>', 'na sztywno <span class="mono">8</span>', 'nie'],
+     ['Parzystosc', '<span class="mono">EVEN</span>', 'na sztywno <span class="mono">EVEN</span>', 'nie'],
+     ['Bity stopu', '<span class="mono">1</span>', 'na sztywno <span class="mono">1</span>', 'nie'],
+     ['Sterowanie przeplywem', '<span class="mono">brak</span>', 'nie dotyczy', 'nie'],
+     ['Terminacja', 'zwykle brak — bramka na koncu linii ma wlasna',
+      '<span class="mono">SW5 = 120 Ω</span> na interfejsie o adresie 1', 'tak'],
+     ['Adres slave', 'nie dotyczy — bramka nie adresuje',
+      `<span class="mono">SW1 = ${DEV.slave}</span>`, 'tak'],
+    ].forEach(([p, a, c, ch]) => {
+      const tr = el('tr');
+      [p, a, c].forEach((x, i) => {
+        const td = el('td', i === 0 ? 'pname' : 'mono2');
+        td.innerHTML = x; tr.appendChild(td);
+      });
+      tr.appendChild(el('td', ch === 'nie' ? 'fixed' : 'chg', ch === 'nie' ? 'nie' : 'tak'));
+      tb.appendChild(tr);
+    });
+  };
+  sel.onchange = paint;
+  paint();
+  s4.appendChild(t4);
+  s4.appendChild(el('p', 'admnote',
+    'Parzystosc, bity danych i bit stopu sa okreslone przez specyfikacje Toshiby '
+    + '(Specifications Manual, rozdz. 2) i nie da sie ich zmienic po stronie interfejsu — '
+    + 'to bramka musi sie do nich dostosowac. Zmienna jest wylacznie predkosc, adres slave i terminacja.'));
+  s4.appendChild(el('p', 'admnote warnc',
+    'Kolejnosc przy zmianie predkosci: najpierw przestaw SW3 i wcisnij SW7, potem bramke. '
+    + 'Miedzy jednym a drugim lacznosc bedzie zerwana — to normalne.'));
+  root.appendChild(s4);
+}
+
+function adminToggle() {
+  const p = $('#admin');
+  const closed = p.classList.toggle('hidden');
+  $('#adminbtn').classList.toggle('on', !closed);
+  if (!closed) renderAdmin();
+}
+
 // ---------------------------------------------------------------- zdarzenia
 
 $('#refresh').onclick = refresh;
@@ -666,6 +820,11 @@ try {
   const saved = localStorage.getItem('termpos');
   if (saved) $('#termpos').value = saved;
 } catch {}
+$('#adminbtn').onclick = adminToggle;
+$('#adminclose').onclick = () => {
+  $('#admin').classList.add('hidden');
+  $('#adminbtn').classList.remove('on');
+};
 $('#tracebtn').onclick = traceToggle;
 $('#tracerun').onclick = runTrace;
 $('#traceclose').onclick = () => {

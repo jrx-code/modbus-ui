@@ -24,7 +24,12 @@
           "n": 3,
           "label": "Office"
         }
-      ]
+      ],
+      "gateway": {
+        "type": "ew11",
+        "url": "http://192.0.2.10",
+        "note": "docelowo Waveshare RS232/485 TO WIFI POE ETH (B)"
+      }
     }
   ],
   "ai": {
