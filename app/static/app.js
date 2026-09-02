@@ -691,22 +691,103 @@ function adminRow(k, v, cls) {
   return tr;
 }
 
+let ADMMSG = null;
+
 function renderAdmin() {
   const gw = (DEV.gateway || {});
   const g = GATEWAYS[gw.type] || GATEWAYS.ew11;
   const root = $('#adminbody');
   root.innerHTML = '';
 
-  // --- 1. co widzi aplikacja
+  // --- 1. edytowalne parametry polaczenia
   const s1 = el('div', 'adm');
-  s1.appendChild(el('h3', '', '1 · Czym aplikacja laczy sie z bramka'));
+  s1.appendChild(el('h3', '', '1 · Polaczenie z bramka — edytowalne'));
+  const form = el('div', 'admform');
+  const fields = {};
+  const addField = (key, label, type, opts) => {
+    const row = el('div', 'frow');
+    const lab = el('label', '', label);
+    if ((DEV._overridden || []).includes(key)) lab.appendChild(el('span', 'ovr', 'zmienione'));
+    row.appendChild(lab);
+    let inp;
+    if (type === 'select') {
+      inp = el('select');
+      opts.forEach(o => inp.add(new Option(o[1], o[0])));
+      inp.value = String(DEV[key]);
+    } else {
+      inp = el('input');
+      inp.type = type;
+      if (type === 'number') { inp.step = opts.step; inp.min = opts.min; inp.max = opts.max; }
+      inp.value = DEV[key];
+    }
+    fields[key] = inp;
+    row.appendChild(inp);
+    form.appendChild(row);
+  };
+  addField('host', 'Adres bramki', 'text');
+  addField('port', 'Port', 'number', { step: 1, min: 1, max: 65535 });
+  addField('framing', 'Ramkowanie', 'select',
+    [['rtuovertcp', 'rtuovertcp — most przezroczysty'], ['tcp', 'tcp — bramka konwertuje MBAP']]);
+  addField('slave', 'Adres slave', 'number', { step: 1, min: 1, max: 247 });
+  addField('timeout', 'Timeout (s)', 'number', { step: 0.5, min: 0.5, max: 60 });
+
+  const grow = el('div', 'frow');
+  grow.appendChild(el('label', '', 'Panel bramki'));
+  const gurl = el('input'); gurl.type = 'text'; gurl.value = gw.url || '';
+  grow.appendChild(gurl); form.appendChild(grow);
+
+  const gtrow = el('div', 'frow');
+  gtrow.appendChild(el('label', '', 'Typ bramki'));
+  const gtype = el('select');
+  [['ew11', 'Elfin EW11'], ['waveshare', 'Waveshare (B)'], ['generic', 'inna']]
+    .forEach(o => gtype.add(new Option(o[1], o[0])));
+  gtype.value = gw.type || 'ew11';
+  gtrow.appendChild(gtype); form.appendChild(gtrow);
+
+  s1.appendChild(form);
+  const bar = el('div', 'admbar');
+  const save = el('button', 'primary small', 'Zapisz i przelacz');
+  const reset = el('button', 'ghost small', 'Przywroc z pliku');
+  const msg = el('span', 'admmsg');
+  if (ADMMSG) { msg.className = 'admmsg ' + ADMMSG[0]; msg.textContent = ADMMSG[1]; ADMMSG = null; }
+  bar.append(save, reset, msg);
+  s1.appendChild(bar);
+  s1.appendChild(el('p', 'admnote',
+    'Zmiany trafiaja do warstwy nadpisan w /var/lib/modbus-ui/overrides.json — '
+    + 'plik /etc/modbus-ui/config.json zostaje nietkniety. '
+    + '„Przywroc z pliku" kasuje nadpisania dla tego urzadzenia.'));
+
+  const post = async (url, payload, okMsg) => {
+    save.disabled = reset.disabled = true;
+    msg.className = 'admmsg';
+    msg.textContent = 'zapisywanie…';
+    try {
+      await api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify(payload) });
+      DEVICES = (await api('/api/devices')).devices;
+      DEV = DEVICES.find(d => d.id === DEV.id);
+      ADMMSG = ['ok', okMsg];
+      renderAdmin();
+      renderAll();
+      refresh();
+    } catch (e) {
+      msg.className = 'admmsg bad';
+      msg.textContent = 'blad: ' + e.message;
+      save.disabled = reset.disabled = false;
+    }
+  };
+  save.onclick = () => post('/api/config', { device: DEV.id, changes: {
+      host: fields.host.value, port: +fields.port.value, framing: fields.framing.value,
+      slave: +fields.slave.value, timeout: +fields.timeout.value,
+      gateway: { url: gurl.value, type: gtype.value },
+    } }, 'zapisano — trwa ponowny odczyt');
+  reset.onclick = () => post('/api/config/reset', { device: DEV.id }, 'przywrocono z pliku');
+
   const t1 = el('table', 'adm-t');
-  [['Adres', `<span class="mono">${DEV.host}:${DEV.port}</span>`],
-   ['Ramkowanie', `<span class="mono">${DEV.framing}</span> — ${g.framingWhy}`],
-   ['Adres slave', `<span class="mono">${DEV.slave}</span> (interfejs zajmuje tez ${DEV.slave + 1} i ${DEV.slave + 2})`],
-   ['Timeout', `<span class="mono">${DEV.timeout} s</span>`],
-   ['Zapis', DEV.write_enabled ? 'wlaczony' : 'WYLACZONY'],
-  ].forEach(([k, v]) => t1.appendChild(adminRow(k, v)));
+  t1.appendChild(adminRow('Ramkowanie', g.framingWhy));
+  t1.appendChild(adminRow('Adres slave',
+    `interfejs zajmuje tez <span class="mono">${DEV.slave + 1}</span> i <span class="mono">${DEV.slave + 2}</span>`));
+  t1.appendChild(adminRow('Zapis', DEV.write_enabled ? 'wlaczony' : 'WYLACZONY'));
   s1.appendChild(t1);
   root.appendChild(s1);
 

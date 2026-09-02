@@ -30,6 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/modbus-ui/config.json")
 AUDIT_FILE = os.environ.get("AUDIT_FILE", "/var/lib/modbus-ui/audit.jsonl")
+OVERRIDE_FILE = os.environ.get("OVERRIDE_FILE", "/var/lib/modbus-ui/overrides.json")
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "8080"))
 
 FUNC = {"coil": 0x01, "discrete": 0x02, "holding": 0x03, "input": 0x04}
@@ -42,9 +43,45 @@ def log(msg: str) -> None:
 
 # --------------------------------------------------------------------------- konfiguracja
 
+# Pola polaczenia, ktore wolno zmienic z panelu. Reszta configu jest nietykalna.
+EDITABLE = {
+    "host": ("str", None),
+    "port": ("int", (1, 65535)),
+    "framing": ("enum", ("rtuovertcp", "tcp")),
+    "slave": ("int", (1, 247)),
+    "timeout": ("float", (0.5, 60.0)),
+    "write_enabled": ("bool", None),
+}
+
+
+def load_overrides() -> dict:
+    try:
+        with open(OVERRIDE_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_overrides(data: dict) -> None:
+    os.makedirs(os.path.dirname(OVERRIDE_FILE), exist_ok=True)
+    tmp = OVERRIDE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, OVERRIDE_FILE)
+
+
 def load_config() -> dict:
     with open(CONFIG_FILE) as f:
         cfg = json.load(f)
+    ov = load_overrides()
+    for dev in cfg["devices"]:
+        d = ov.get(dev["id"]) or {}
+        for k, v in d.items():
+            if k == "gateway" and isinstance(v, dict):
+                dev.setdefault("gateway", {}).update(v)
+            elif k in EDITABLE:
+                dev[k] = v
+        dev["_overridden"] = sorted(k for k in d if k != "gateway")
     for dev in cfg["devices"]:
         builder = dev.get("map")
         if builder == "toshiba":
@@ -548,6 +585,78 @@ def trace_device(dev: dict) -> dict:
             units.append(ev["unit"])
     return {"steps": steps, "units": units, "ts": time.time()}
 
+def apply_config(dev_id: str, changes: dict) -> dict:
+    """Waliduje i zapisuje nadpisania polaczenia, potem przeladowuje konfiguracje."""
+    global CFG
+    clean = {}
+    for k, v in changes.items():
+        if k == "gateway":
+            if not isinstance(v, dict):
+                raise ValueError("gateway musi byc obiektem")
+            g = {}
+            if "url" in v:
+                u = str(v["url"]).strip()
+                if u and not u.startswith(("http://", "https://")):
+                    raise ValueError("adres panelu bramki musi zaczynac sie od http:// lub https://")
+                g["url"] = u
+            if "type" in v:
+                t = str(v["type"]).strip()
+                if t not in ("ew11", "waveshare", "generic"):
+                    raise ValueError(f"nieznany typ bramki: {t}")
+                g["type"] = t
+            if g:
+                clean["gateway"] = g
+            continue
+        if k not in EDITABLE:
+            raise ValueError(f"pole {k} nie jest edytowalne")
+        kind, rng = EDITABLE[k]
+        if kind == "str":
+            v = str(v).strip()
+            if not v or any(c.isspace() for c in v):
+                raise ValueError("adres nie moze byc pusty ani zawierac spacji")
+        elif kind == "int":
+            v = int(v)
+            if not rng[0] <= v <= rng[1]:
+                raise ValueError(f"{k} poza zakresem {rng[0]}-{rng[1]}")
+        elif kind == "float":
+            v = float(v)
+            if not rng[0] <= v <= rng[1]:
+                raise ValueError(f"{k} poza zakresem {rng[0]}-{rng[1]}")
+        elif kind == "enum":
+            v = str(v)
+            if v not in rng:
+                raise ValueError(f"{k} musi byc jednym z: {', '.join(rng)}")
+        elif kind == "bool":
+            v = bool(v)
+        clean[k] = v
+
+    ov = load_overrides()
+    cur = ov.get(dev_id) or {}
+    for k, v in clean.items():
+        if k == "gateway":
+            cur.setdefault("gateway", {}).update(v)
+        else:
+            cur[k] = v
+    ov[dev_id] = cur
+    save_overrides(ov)
+    CFG = load_config()
+    log(f"KONFIGURACJA {dev_id}: {clean}")
+    TXLOG.note(dev_id, "zmiana konfiguracji polaczenia: "
+               + ", ".join(f"{k}={v}" for k, v in clean.items()), "warn")
+    return {"ok": True, "device": public_device(CFG["byid"][dev_id])}
+
+
+def reset_config(dev_id: str) -> dict:
+    global CFG
+    ov = load_overrides()
+    ov.pop(dev_id, None)
+    save_overrides(ov)
+    CFG = load_config()
+    log(f"KONFIGURACJA {dev_id}: przywrocona z pliku")
+    TXLOG.note(dev_id, "konfiguracja przywrocona z pliku", "warn")
+    return {"ok": True, "device": public_device(CFG["byid"][dev_id])}
+
+
 # --------------------------------------------------------------------------- HTTP
 
 def public_device(dev: dict) -> dict:
@@ -669,6 +778,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if u.path == "/api/preview":
                 self._json(200, preview_write(dev, body["key"], body["value"]))
+            elif u.path == "/api/config":
+                self._json(200, apply_config(body["device"], body.get("changes") or {}))
+            elif u.path == "/api/config/reset":
+                self._json(200, reset_config(body["device"]))
             elif u.path == "/api/write":
                 if not dev.get("write_enabled", False):
                     self._json(403, {"error": "zapis wylaczony dla tego urzadzenia"})
