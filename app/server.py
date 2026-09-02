@@ -254,60 +254,86 @@ def _tcp_probe(host: str, port: int, timeout: float = 3.0):
         return False, round((time.monotonic() - t0) * 1000, 1), str(exc)
 
 
-def trace_device(dev: dict) -> dict:
-    """Slad polaczenia: aplikacja -> siec -> bramka -> interfejs -> magistrala -> jednostki."""
+def _frames_since(mark: int) -> list[dict]:
+    out = []
+    for e in TXLOG.since(mark):
+        if e.get("kind") != "tx":
+            continue
+        out.append({"tx": e["tx"], "rx": e.get("rx"), "ms": e.get("ms"),
+                    "ok": e.get("ok"), "err": e.get("err"),
+                    "fname": e.get("fname"), "unit": e.get("unit")})
+    return out
+
+
+def trace_steps(dev: dict):
+    """Generator krokow diagnostyki. Kazdy krok emitowany dwa razy:
+    najpierw ze stanem 'run', potem z wynikiem i ramkami, ktore poszly na magistrale."""
     client: ModbusClient = dev["client"]
     slave = dev["slave"]
-    steps = []
     TXLOG.note(dev["id"], "diagnostyka lancucha — start")
 
-    steps.append({"id": "app", "name": "Aplikacja modbus-ui", "state": "ok",
-                  "detail": f"{len(dev['registers'])} rejestrow w mapie",
-                  "hint": None})
+    plan = [
+        ("app", "Aplikacja modbus-ui"),
+        ("net", f"Bramka {dev['host']}:{dev['port']}"),
+        ("iface", f"Interfejs Modbus (slave {slave})"),
+        ("rs485", "Magistrala RS-485"),
+        ("uh", "Magistrala Uh (TU2C-LINK)"),
+    ]
+    yield {"type": "plan", "steps": [{"id": i, "name": n} for i, n in plan]}
 
+    def start(sid):
+        yield_ = {"type": "step", "id": sid, "state": "run"}
+        return yield_
+
+    # 1 — aplikacja
+    yield start("app")
+    yield {"type": "step", "id": "app", "state": "ok",
+           "detail": f"{len(dev['registers'])} rejestrow w mapie", "frames": []}
+
+    # 2 — siec do bramki
+    yield start("net")
     ok, ms, err = _tcp_probe(dev["host"], dev["port"])
-    steps.append({"id": "net", "name": f"Bramka {dev['host']}:{dev['port']}",
-                  "state": "ok" if ok else "fail", "ms": ms,
-                  "detail": f"TCP nawiazane w {ms} ms" if ok else err,
-                  "hint": None if ok else
-                  "Sprawdz zasilanie i WiFi bramki oraz jej adres IP."})
+    yield {"type": "step", "id": "net", "state": "ok" if ok else "fail", "ms": ms,
+           "detail": f"TCP nawiazane w {ms} ms" if ok else err, "frames": [],
+           "hint": None if ok else "Sprawdz zasilanie i WiFi bramki oraz jej adres IP."}
 
     if not ok:
-        for sid, nm in (("iface", "Interfejs Modbus"), ("rs485", "Magistrala RS-485"),
-                        ("uh", "Magistrala Uh")):
-            steps.append({"id": sid, "name": nm, "state": "skip",
-                          "detail": "pominiete — brak polaczenia z bramka", "hint": None})
-        return {"steps": steps, "units": [], "ts": time.time()}
+        for sid in ("iface", "rs485", "uh"):
+            yield {"type": "step", "id": sid, "state": "skip",
+                   "detail": "pominiete — brak polaczenia z bramka", "frames": []}
+        yield {"type": "done"}
+        return
 
-    # echo na kolejnych adresach slave (interfejs zajmuje N, N+1, N+2)
-    slaves = []
+    # 3 — interfejs Modbus, echo na trzech adresach slave
+    yield start("iface")
+    mark = TXLOG.last_seq()
+    alive = []
     for s_addr in (slave, slave + 1, slave + 2):
-        t0 = time.monotonic()
         try:
             client.diagnostics(s_addr, 0x00, 0x1234)
-            slaves.append({"addr": s_addr, "ok": True,
-                           "ms": round((time.monotonic() - t0) * 1000, 1)})
-        except (ModbusError, OSError) as exc:
-            slaves.append({"addr": s_addr, "ok": False, "err": str(exc)})
-    alive = [x for x in slaves if x["ok"]]
-    steps.append({
-        "id": "iface", "name": f"Interfejs Modbus (slave {slave})",
-        "state": "ok" if any(x["addr"] == slave and x["ok"] for x in slaves) else "fail",
-        "ms": next((x["ms"] for x in alive if x["addr"] == slave), None),
-        "detail": "odpowiada na echo 0x08/0x00 pod adresami: "
-                  + (", ".join(str(x["addr"]) for x in alive) or "brak"),
-        "hint": None if alive else
-        "SW1 musi byc w zakresie 1-F (przy 0 modul milczy). Po zmianie wcisnij SW7. "
-        "Sprawdz predkosc SW3 i parzystosc EVEN na bramce.",
-    })
+            alive.append(s_addr)
+        except (ModbusError, OSError):
+            pass
+    frames = _frames_since(mark)
+    ms = next((f["ms"] for f in frames if f["ok"]), None)
+    yield {"type": "step", "id": "iface", "state": "ok" if slave in alive else "fail",
+           "ms": ms, "frames": frames,
+           "detail": "odpowiada na echo 0x08/0x00 pod adresami: "
+                     + (", ".join(map(str, alive)) or "brak"),
+           "hint": None if alive else
+           "SW1 musi byc w zakresie 1-F (przy 0 modul milczy). Po zmianie wcisnij SW7. "
+           "Sprawdz predkosc SW3 i parzystosc EVEN na bramce."}
 
     if not alive:
-        steps.append({"id": "rs485", "name": "Magistrala RS-485", "state": "skip",
-                      "detail": "pominiete — interfejs nie odpowiada", "hint": None})
-        steps.append({"id": "uh", "name": "Magistrala Uh", "state": "skip",
-                      "detail": "pominiete", "hint": None})
-        return {"steps": steps, "units": [], "slaves": slaves, "ts": time.time()}
+        for sid in ("rs485", "uh"):
+            yield {"type": "step", "id": sid, "state": "skip",
+                   "detail": "pominiete — interfejs nie odpowiada", "frames": []}
+        yield {"type": "done"}
+        return
 
+    # 4 — liczniki magistrali RS-485
+    yield start("rs485")
+    mark = TXLOG.last_seq()
     counters = {}
     for label, sub in (("ramki", 0x0B), ("bledy_crc", 0x0C), ("do_slave", 0x0E)):
         try:
@@ -315,43 +341,53 @@ def trace_device(dev: dict) -> dict:
         except (ModbusError, OSError):
             counters[label] = None
     crc = counters.get("bledy_crc")
-    steps.append({
-        "id": "rs485", "name": "Magistrala RS-485",
-        "state": "ok" if crc == 0 else ("warn" if crc else "warn"),
-        "detail": f"ramek {counters.get('ramki')}, bledow CRC {crc}, "
-                  f"do tego slave {counters.get('do_slave')}",
-        "hint": None if crc == 0 else
-        "Bledy CRC oznaczaja problem warstwy fizycznej: terminacja SW5, ekran, dlugosc linii.",
-    })
+    yield {"type": "step", "id": "rs485", "state": "ok" if crc == 0 else "warn",
+           "frames": _frames_since(mark),
+           "detail": f"ramek {counters.get('ramki')}, bledow CRC {crc}, "
+                     f"do tego slave {counters.get('do_slave')}",
+           "hint": None if crc == 0 else
+           "Bledy CRC oznaczaja problem warstwy fizycznej: terminacja SW5, ekran, dlugosc linii."}
 
-    # jednostki wewnetrzne — obecnosc po nazwie modelu
+    # 5 — magistrala Uh, jednostka po jednostce
+    yield start("uh")
     units_out = []
-    for r in dev["registers"]:
-        if r.get("card") != "ident":
-            continue
+    idents = [r for r in dev["registers"] if r.get("card") == "ident"]
+    mark_all = TXLOG.last_seq()
+    for r in idents:
+        mark = TXLOG.last_seq()
         try:
             words = client.read_regs(slave, FUNC[r["space"]], r["addr"], r["count"])
             dec = decode(r, words)
             present = not dec.get("absent")
-            units_out.append({"iu": r.get("iu"), "label": r.get("iu_label"),
-                              "present": present,
-                              "model": dec["value"] if present else None})
+            u = {"iu": r.get("iu"), "label": r.get("iu_label"), "present": present,
+                 "model": dec["value"] if present else None}
         except (ModbusError, OSError) as exc:
-            units_out.append({"iu": r.get("iu"), "label": r.get("iu_label"),
-                              "present": False, "error": str(exc)})
-    n_present = sum(1 for u in units_out if u["present"])
-    steps.append({
-        "id": "uh", "name": "Magistrala Uh (TU2C-LINK)",
-        "state": "ok" if n_present else "warn",
-        "detail": f"{n_present} z {len(units_out)} jednostek odpowiada",
-        "hint": None if n_present else
-        "Zaden RAC interface nie odpowiada. Jesli nie sa jeszcze zamontowane — to stan oczekiwany. "
-        "Jesli sa: sprawdz SW62 Bit3 = ON, SW61 Bit3 = ON oraz Central controller ID = old controller.",
-    })
-    TXLOG.note(dev["id"], "diagnostyka lancucha — koniec", "ok")
-    return {"steps": steps, "units": units_out, "slaves": slaves,
-            "counters": counters, "ts": time.time()}
+            u = {"iu": r.get("iu"), "label": r.get("iu_label"),
+                 "present": False, "error": str(exc)}
+        u["frames"] = _frames_since(mark)
+        units_out.append(u)
+        yield {"type": "unit", "unit": u}
 
+    n_present = sum(1 for u in units_out if u["present"])
+    yield {"type": "step", "id": "uh", "state": "ok" if n_present else "warn",
+           "frames": _frames_since(mark_all),
+           "detail": f"{n_present} z {len(units_out)} jednostek odpowiada",
+           "hint": None if n_present else
+           "Zaden RAC interface nie odpowiada. Jesli nie sa jeszcze zamontowane — to stan oczekiwany. "
+           "Jesli sa: sprawdz SW62 Bit3 = ON, SW61 Bit3 = ON oraz Central controller ID = old controller."}
+    TXLOG.note(dev["id"], "diagnostyka lancucha — koniec", "ok")
+    yield {"type": "done"}
+
+
+def trace_device(dev: dict) -> dict:
+    """Wersja bez strumienia — zbiera to samo, co trace_steps."""
+    steps, units = [], []
+    for ev in trace_steps(dev):
+        if ev["type"] == "step" and ev.get("state") != "run":
+            steps.append(ev)
+        elif ev["type"] == "unit":
+            units.append(ev["unit"])
+    return {"steps": steps, "units": units, "ts": time.time()}
 
 # --------------------------------------------------------------------------- HTTP
 
@@ -414,6 +450,30 @@ class Handler(BaseHTTPRequestHandler):
                     except (ModbusError, OSError) as exc:
                         out[label] = f"blad: {exc}"
                 self._json(200, out)
+            elif u.path == "/api/trace/stream":
+                dev = CFG["byid"].get(q.get("device", [""])[0])
+                if not dev:
+                    self._json(404, {"error": "nieznane urzadzenie"})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                try:
+                    for ev in trace_steps(dev):
+                        payload = json.dumps(ev, ensure_ascii=False)
+                        self.wfile.write(f"data: {payload}\n\n".encode())
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                except Exception as exc:  # noqa: BLE001
+                    try:
+                        self.wfile.write(
+                            f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n".encode())
+                        self.wfile.flush()
+                    except OSError:
+                        pass
             elif u.path == "/api/trace":
                 dev = CFG["byid"].get(q.get("device", [""])[0])
                 if not dev:

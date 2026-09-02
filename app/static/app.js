@@ -453,35 +453,107 @@ function termToggle() {
 
 // ---------------------------------------------------------------- diagnostyka
 
-async function runTrace() {
-  const p = $('#trace'); p.classList.remove('hidden');
-  $('#chain').innerHTML = '<p class="note" style="padding:0 14px">testowanie…</p>';
-  $('#tracedet').innerHTML = '';
-  try {
-    const d = await api('/api/trace?device=' + encodeURIComponent(DEV.id));
-    $('#tracets').textContent = 'ostatni test: ' + new Date(d.ts * 1000).toLocaleTimeString('pl-PL');
-    const chain = $('#chain'); chain.innerHTML = '';
-    const LBL = { ok: 'OK', warn: 'uwaga', fail: 'błąd', skip: 'pominięte' };
-    d.steps.forEach(st => {
-      const n = el('div', 'node ' + st.state);
-      n.appendChild(el('span', 'nm', st.name));
-      n.appendChild(el('span', 'st', LBL[st.state] + (st.ms != null ? ` · ${st.ms} ms` : '')));
-      n.appendChild(el('span', 'dt', st.detail || ''));
-      chain.appendChild(n);
-    });
-    const det = $('#tracedet'); det.innerHTML = '';
-    d.steps.filter(s => s.hint).forEach(s =>
-      det.appendChild(el('div', 'hintbox', s.name + ': ' + s.hint)));
-    if (d.units && d.units.length) {
-      const g = el('div', 'unitgrid');
-      d.units.forEach(u => g.appendChild(el('div', 'ubox ' + (u.present ? 'on' : 'off'),
-        `${u.label}: ${u.present ? (u.model || 'obecna') : 'brak odpowiedzi'}`)));
-      det.appendChild(g);
+const TRACE_LBL = { pending: 'oczekuje', run: 'trwa…', ok: 'OK',
+                    warn: 'uwaga', fail: 'błąd', skip: 'pominięte' };
+
+function frameRows(frames) {
+  const box = el('div', 'frames');
+  (frames || []).forEach(f => {
+    const tx = el('div', 'fr tx');
+    tx.appendChild(el('span', 'd', 'TX'));
+    tx.appendChild(document.createTextNode(' ' + grp(f.tx)));
+    box.appendChild(tx);
+    if (f.ok && f.rx) {
+      const rx = el('div', 'fr rx');
+      rx.appendChild(el('span', 'd', 'RX'));
+      rx.appendChild(document.createTextNode(' ' + grp(f.rx)));
+      rx.appendChild(el('span', 'ms', f.ms + ' ms'));
+      box.appendChild(rx);
+    } else {
+      const er = el('div', 'fr err');
+      er.appendChild(el('span', 'd', 'ERR'));
+      er.appendChild(document.createTextNode(' ' + (f.err || 'brak odpowiedzi')));
+      box.appendChild(er);
     }
+  });
+  return box;
+}
+
+function paintNode(id, st) {
+  const n = document.querySelector(`.node[data-id="${id}"]`);
+  if (!n) return;
+  n.className = 'node ' + (st.state || 'pending');
+  n.querySelector('.st').textContent =
+    (TRACE_LBL[st.state] || st.state) + (st.ms != null ? ` · ${st.ms} ms` : '');
+  n.querySelector('.dt').textContent = st.detail || '';
+  const old = n.querySelector('.frames');
+  if (old) old.remove();
+  if (st.frames && st.frames.length) n.appendChild(frameRows(st.frames));
+}
+
+async function runTrace() {
+  const panel = $('#trace');
+  panel.classList.remove('hidden');
+  $('#chain').innerHTML = '';
+  $('#tracedet').innerHTML = '';
+  $('#tracets').textContent = 'test w toku…';
+  $('#tracerun').disabled = true;
+
+  const hints = [];
+  const unitBoxes = el('div', 'unitgrid');
+  $('#tracedet').appendChild(unitBoxes);
+
+  try {
+    const res = await fetch('/api/trace/stream?device=' + encodeURIComponent(DEV.id));
+    if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.split('\n').find(x => x.startsWith('data:'));
+        if (!line) continue;
+        const ev = JSON.parse(line.slice(5));
+
+        if (ev.type === 'plan') {
+          const chain = $('#chain');
+          ev.steps.forEach(stp => {
+            const n = el('div', 'node pending');
+            n.dataset.id = stp.id;
+            n.appendChild(el('span', 'nm', stp.name));
+            n.appendChild(el('span', 'st', TRACE_LBL.pending));
+            n.appendChild(el('span', 'dt', ''));
+            chain.appendChild(n);
+          });
+        } else if (ev.type === 'step') {
+          paintNode(ev.id, ev);
+          if (ev.hint) hints.push({ id: ev.id, hint: ev.hint });
+        } else if (ev.type === 'unit') {
+          const u = ev.unit;
+          unitBoxes.appendChild(el('div', 'ubox ' + (u.present ? 'on' : 'off'),
+            `${u.label}: ${u.present ? (u.model || 'obecna') : 'brak odpowiedzi'}`));
+        } else if (ev.type === 'error') {
+          throw new Error(ev.error);
+        }
+      }
+    }
+
+    hints.forEach(h => {
+      const n = document.querySelector(`.node[data-id="${h.id}"] .nm`);
+      $('#tracedet').insertBefore(
+        el('div', 'hintbox', (n ? n.textContent + ': ' : '') + h.hint), unitBoxes);
+    });
+    $('#tracets').textContent = 'ostatni test: ' + new Date().toLocaleTimeString('pl-PL');
   } catch (e) {
-    $('#chain').innerHTML = '';
-    $('#chain').appendChild(el('p', 'note', 'błąd testu: ' + e.message));
+    $('#tracets').textContent = 'błąd testu: ' + e.message;
   }
+  $('#tracerun').disabled = false;
 }
 
 // ---------------------------------------------------------------- zdarzenia

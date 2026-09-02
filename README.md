@@ -23,9 +23,10 @@ units, and no indication of what is safe to write. This tool sits in between:
 ## Screenshots
 
 ### Chain diagnostics
-Five nodes from the application down to the field bus. Each one is measured, and a
-failing node explains what to check — including device-specific hints such as DIP
-switch positions.
+Five nodes from the application down to the field bus, streamed over SSE so each tile
+updates as its stage runs — pending, running, then the result. Every tile carries the
+frames it actually put on the wire, TX and RX in hex with round-trip timing. A failing
+node explains what to check, including device-specific hints such as DIP switch positions.
 
 ![Diagnostics](docs/img/02-diagnostics.png)
 

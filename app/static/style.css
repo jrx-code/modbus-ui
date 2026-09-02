@@ -197,3 +197,26 @@ dd{margin:0;font-family:ui-monospace,Menlo,monospace;word-break:break-all;font-s
 .ubox{padding:6px 12px;border-radius:7px;border:1px solid var(--line);font-size:12px}
 .ubox.on{border-color:#1d4527;background:#0f1b13;color:var(--ok)}
 .ubox.off{color:var(--mut)}
+
+/* ---------- diagnostyka: stan na zywo + ramki na kafelku ---------- */
+.chain{align-items:flex-start}
+.node{transition:border-color .2s,background .2s}
+.node.pending{opacity:.55}
+.node.pending .st{color:var(--dim)}
+.node.run{border-color:var(--acc2);background:#0e1a27}
+.node.run .st{color:var(--acc)}
+.node.run::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;
+  border-radius:0 0 9px 9px;background:linear-gradient(90deg,transparent,var(--acc),transparent);
+  animation:scan 1.1s linear infinite}
+@keyframes scan{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+.node.run+.node::before{background:var(--line2)}
+.frames{margin-top:8px;border-top:1px solid var(--line);padding-top:7px;
+  display:flex;flex-direction:column;gap:2px;max-height:190px;overflow:auto}
+.fr{font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
+.fr .d{display:inline-block;width:26px;color:var(--dim)}
+.fr.tx{color:#79c0ff}
+.fr.rx{color:#56d364}
+.fr.err{color:var(--bad)}
+.fr .ms{color:var(--dim);margin-left:8px}
+.frames::-webkit-scrollbar{height:8px;width:8px}
+.frames::-webkit-scrollbar-thumb{background:#2b3644;border-radius:4px}
