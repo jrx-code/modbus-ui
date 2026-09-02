@@ -491,9 +491,38 @@ function paintNode(id, st) {
   if (st.frames && st.frames.length) n.appendChild(frameRows(st.frames));
 }
 
+function traceSkeleton() {
+  const chain = $('#chain');
+  chain.innerHTML = '';
+  [['app', 'Aplikacja modbus-ui'],
+   ['net', `Bramka ${DEV.host}:${DEV.port}`],
+   ['iface', `Interfejs Modbus (slave ${DEV.slave})`],
+   ['rs485', 'Magistrala RS-485'],
+   ['uh', 'Magistrala Uh (TU2C-LINK)']].forEach(([id, name]) => {
+    const n = el('div', 'node pending');
+    n.dataset.id = id;
+    n.appendChild(el('span', 'nm', name));
+    n.appendChild(el('span', 'st', TRACE_LBL.pending));
+    n.appendChild(el('span', 'dt', ''));
+    chain.appendChild(n);
+  });
+}
+
+function traceToggle() {
+  const panel = $('#trace');
+  const closed = panel.classList.toggle('hidden');
+  $('#tracebtn').classList.toggle('on', !closed);
+  if (!closed && !$('#chain').children.length) {
+    traceSkeleton();
+    $('#tracets').textContent = 'nie uruchomiono';
+    $('#tracedet').innerHTML = '';
+  }
+}
+
 async function runTrace() {
   const panel = $('#trace');
   panel.classList.remove('hidden');
+  $('#tracebtn').classList.add('on');
   $('#chain').innerHTML = '';
   $('#tracedet').innerHTML = '';
   $('#tracets').textContent = 'test w toku…';
@@ -572,9 +601,12 @@ try {
   const saved = localStorage.getItem('termpos');
   if (saved) $('#termpos').value = saved;
 } catch {}
-$('#tracebtn').onclick = runTrace;
+$('#tracebtn').onclick = traceToggle;
 $('#tracerun').onclick = runTrace;
-$('#traceclose').onclick = () => $('#trace').classList.add('hidden');
+$('#traceclose').onclick = () => {
+  $('#trace').classList.add('hidden');
+  $('#tracebtn').classList.remove('on');
+};
 $('#q').oninput = renderTables;
 $('#onlywrite').onchange = renderTables;
 $('#mcancel').onclick = () => $('#modal').classList.add('hidden');
