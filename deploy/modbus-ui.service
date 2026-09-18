@@ -11,7 +11,7 @@ WorkingDirectory=/opt/modbus-ui/app
 Environment=LISTEN_PORT=8080
 Environment=CONFIG_FILE=/etc/modbus-ui/config.json
 Environment=AUDIT_FILE=/var/lib/modbus-ui/audit.jsonl
-ExecStart=/usr/bin/python3 -u /opt/modbus-ui/app/server.py
+ExecStart=/usr/bin/python3 -u /opt/modbus-ui/app/run.py
 Restart=on-failure
 RestartSec=5
 
