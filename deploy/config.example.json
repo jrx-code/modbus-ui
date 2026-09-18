@@ -9,7 +9,7 @@
       "framing": "rtuovertcp",
       "timeout": 2.5,
       "slave": 1,
-      "write_enabled": true,
+      "write_enabled": false,
       "map": "toshiba",
       "units": [
         {
