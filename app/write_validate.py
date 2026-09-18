@@ -43,3 +43,25 @@ def validate_write(dev: dict, key: str, value) -> tuple[dict, int]:
     if reg.get("wmax") is not None and float(value) > reg["wmax"]:
         raise ValueError(f"Powyzej maksimum {reg['wmax']}")
     return reg, raw
+
+
+def apply_parity_patches() -> None:
+    """Podmien preview_write/write_register w module server.
+
+    Obie sciezki wolaja validate_write (enum/wmin/wmax/space). Uruchamiane z run.py.
+    """
+    import server as _server
+
+    _preview = _server.preview_write
+    _write = _server.write_register
+
+    def preview_write(dev: dict, key: str, value):
+        validate_write(dev, key, value)
+        return _preview(dev, key, value)
+
+    def write_register(dev: dict, key: str, value):
+        validate_write(dev, key, value)
+        return _write(dev, key, value)
+
+    _server.preview_write = preview_write
+    _server.write_register = write_register
