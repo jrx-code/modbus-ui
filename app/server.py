@@ -174,7 +174,10 @@ def read_device(dev: dict) -> dict:
         if not regs:
             continue
         bits = space in BITSPACES
-        limit, gap = (800, 32) if bits else (100, 8)
+        # Registers capped at 16: the Waveshare gateway in front of the Toshiba
+        # interface goes silent (no exception, just a timeout) above 16 registers.
+        # Measured 2026-09-03: 16 always, 17 in 2/3 tries, >=20 never.
+        limit, gap = (800, 32) if bits else (16, 8)
         for lo, hi in _spans(regs, limit, gap):
             count = hi - lo + 1
             try:
