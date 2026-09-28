@@ -261,7 +261,19 @@ function renderAll() { renderCards(); renderTables(); }
 
 // ---------------------------------------------------------------- odczyt / zapis
 
-async function refresh() {
+// A full read takes ~20 s over the Toshiba gateway (~800 ms per frame), so two
+// overlapping calls must not start two reads: a call during a read only asks for
+// one more pass after it, which also picks up anything written meanwhile.
+let READING = null, READ_AGAIN = false;
+function refresh() {
+  if (READING) { READ_AGAIN = true; return READING; }
+  READING = (async () => {
+    do { READ_AGAIN = false; await readOnce(); } while (READ_AGAIN);
+  })().finally(() => { READING = null; });
+  return READING;
+}
+
+async function readOnce() {
   const st = $('#status');
   st.className = 'pill'; st.textContent = 'odczyt…';
   try {
@@ -309,9 +321,32 @@ async function doWrite() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ device: DEV.id, ...PENDING }) });
     $('#modal').classList.add('hidden');
-    await refresh();
+    showWritten(PENDING.key, PENDING.value);
+    // Do not wait for the read-back: it takes ~20 s and used to keep the
+    // confirm button disabled, so every next write looked blocked.
+    refresh();
   } catch (e) { alert('Zapis nieudany: ' + e.message); }
   $('#mok').disabled = false;
+}
+
+// Shows the written value right away, until the read-back replaces it. The cards
+// draw toggles from the status register (status_key), so that one is set too;
+// otherwise a second click would compute its value from the old state.
+function showWritten(key, value) {
+  const reg = (DEV.registers || []).find(r => r.key === key);
+  if (!reg) return;
+  const raw = reg.type === 'bool'
+    ? (['1', 'true', 'on'].includes(String(value).toLowerCase()) ? 1 : 0)
+    : Number(value);
+  const shown = reg.type === 'bool'
+    ? { raw, value: !!raw, text: raw ? 'ON' : 'OFF' }
+    : { raw: reg.scale ? Math.round(raw / reg.scale) : raw, value: raw,
+        text: reg.enum && reg.enum[raw] !== undefined ? reg.enum[raw] : String(value) };
+  VAL[key] = shown;
+  if (reg.status_key && VAL[reg.status_key]) VAL[reg.status_key] = { ...VAL[reg.status_key], ...shown };
+  renderAll();
+  const st = $('#status');
+  st.className = 'pill'; st.textContent = 'zapisano · odczyt potwierdzający…';
 }
 
 async function showAudit() {
