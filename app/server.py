@@ -236,12 +236,16 @@ def audit(entry: dict) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-def write_register(dev: dict, key: str, value) -> dict:
+def validate_write(dev: dict, key: str, value) -> tuple[dict, int]:
+    """Jedyne miejsce z regulami zapisu. Wola je i zapis, i podglad — inaczej dialog
+    potwierdzenia pokazuje ramke, ktorej POST /api/write potem nie przyjmie."""
     reg = dev["bykey"].get(key)
     if reg is None:
         raise ValueError(f"Nieznany rejestr: {key}")
     if not reg.get("writable"):
         raise PermissionError(f"Rejestr {key} nie jest zapisywalny")
+    if reg["space"] not in ("coil", "holding"):
+        raise PermissionError(f"Przestrzen {reg['space']} jest tylko do odczytu")
 
     raw = encode_write(reg, value)
     if reg.get("enum") and raw not in reg["enum"]:
@@ -250,15 +254,18 @@ def write_register(dev: dict, key: str, value) -> dict:
         raise ValueError(f"Ponizej minimum {reg['wmin']}")
     if reg.get("wmax") is not None and float(value) > reg["wmax"]:
         raise ValueError(f"Powyzej maksimum {reg['wmax']}")
+    return reg, raw
+
+
+def write_register(dev: dict, key: str, value) -> dict:
+    reg, raw = validate_write(dev, key, value)
 
     client: ModbusClient = dev["client"]
     unit = dev["slave"]
     if reg["space"] == "coil":
         frame = client.write_coil(unit, reg["addr"], bool(raw))
-    elif reg["space"] == "holding":
-        frame = client.write_register(unit, reg["addr"], raw)
     else:
-        raise PermissionError(f"Przestrzen {reg['space']} jest tylko do odczytu")
+        frame = client.write_register(unit, reg["addr"], raw)
 
     entry = {"ts": time.time(), "device": dev["id"], "key": key,
              "name": reg["name"], "number": reg["number"], "addr": reg["addr"],
@@ -271,12 +278,7 @@ def write_register(dev: dict, key: str, value) -> dict:
 
 def preview_write(dev: dict, key: str, value) -> dict:
     """Ta sama walidacja co zapis, ale bez wyslania — zasila dialog potwierdzenia."""
-    reg = dev["bykey"].get(key)
-    if reg is None:
-        raise ValueError(f"Nieznany rejestr: {key}")
-    if not reg.get("writable"):
-        raise PermissionError(f"Rejestr {key} nie jest zapisywalny")
-    raw = encode_write(reg, value)
+    reg, raw = validate_write(dev, key, value)
     client: ModbusClient = dev["client"]
     func = 0x05 if reg["space"] == "coil" else 0x06
     payload = raw
